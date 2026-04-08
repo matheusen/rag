@@ -21,8 +21,8 @@ router = APIRouter(prefix="/langchain", tags=["LangChain"])
 @router.post("/ingest", response_model=IngestResponse)
 async def langchain_ingest(file: UploadFile = File(...)):
     """
-    Recebe um arquivo (PDF ou texto), salva temporariamente e ingere
-        no pgvector usando ingestão segura por documento.
+    Recebe um arquivo (PDF, texto ou imagem), salva temporariamente e ingere
+    no pgvector usando ingestão segura por documento, com OCR opcional.
     """
     # Salva o arquivo em disco temporariamente para os loaders do LangChain lerem
     suffix = "." + file.filename.split(".")[-1]
@@ -50,6 +50,8 @@ async def langchain_ingest(file: UploadFile = File(...)):
         chunks_written=first.chunks_written if first else None,
         page_count=first.page_count if first else None,
         summary_updated=first.summary_updated if first else None,
+        image_assets=first.image_assets if first else None,
+        ocr_chunks_written=first.ocr_chunks_written if first else None,
     )
 
 

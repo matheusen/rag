@@ -5,6 +5,7 @@ Rotas:
   GET /sqlalchemy/articles      — lista artigos e quantidade de chunks
   GET /sqlalchemy/chunks        — lista chunks com preview de texto e embedding
   GET /sqlalchemy/chunks/{id}   — detalhe de um chunk com vetor completo
+    GET /sqlalchemy/image-assets  — lista imagens OCR vinculadas aos documentos
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -13,8 +14,9 @@ from api.schemas import (
     SQLAlchemyArticleSummary,
     SQLAlchemyChunkDetail,
     SQLAlchemyChunkPreview,
+    SQLAlchemyImageAssetSummary,
 )
-from rag.sqlalchemy_queries import get_chunk_detail, list_articles, list_chunks
+from rag.sqlalchemy_queries import get_chunk_detail, list_articles, list_chunks, list_image_assets
 
 router = APIRouter(prefix="/sqlalchemy", tags=["SQLAlchemy"])
 
@@ -53,3 +55,13 @@ def sqlalchemy_chunk_detail(
     if item is None:
         raise HTTPException(status_code=404, detail="Chunk não encontrado")
     return item
+
+
+@router.get("/image-assets", response_model=list[SQLAlchemyImageAssetSummary])
+def sqlalchemy_image_assets(
+    source: str | None = Query(None, description="Parte do nome do arquivo/documento pai"),
+    page: int | None = Query(None, ge=0, description="Filtra por página da imagem dentro do documento"),
+    limit: int = Query(50, ge=1, le=500, description="Máximo de imagens OCR retornadas"),
+    preview_chars: int = Query(220, ge=50, le=2000, description="Quantidade de caracteres do preview OCR"),
+):
+    return list_image_assets(source=source, page=page, limit=limit, preview_chars=preview_chars)

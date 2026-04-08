@@ -84,6 +84,27 @@ class EmbeddingStore(Base):
     cmetadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
+class ImageAssetStore(Base):
+    __tablename__ = "rag_document_image_asset"
+
+    asset_id: Mapped[str] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    source_key: Mapped[str] = mapped_column(Text, nullable=False)
+    asset_name: Mapped[str] = mapped_column(Text, nullable=False)
+    asset_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ocr_engine: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ImageEmbeddingStore(Base):
+    __tablename__ = "rag_document_image_embedding"
+
+    chunk_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    asset_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+
+
 def _connection_string() -> str:
     """Monta a URL de conexão SQLAlchemy a partir do .env.
 
@@ -321,3 +342,60 @@ def get_chunk_detail(chunk_id: str, embedding_dims: int | None = None) -> dict[s
         "embedding": embedding,
         "embedding_dimensions": len(row.embedding) if row.embedding is not None else None,
     }
+
+
+def list_image_assets(
+    source: str | None = None,
+    page: int | None = None,
+    limit: int = 50,
+    preview_chars: int = 220,
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(
+            ImageAssetStore.asset_id,
+            ImageAssetStore.source_key.label("source"),
+            ImageAssetStore.asset_name,
+            ImageAssetStore.asset_kind,
+            ImageAssetStore.page_number.label("page"),
+            ImageAssetStore.ocr_engine,
+            ImageAssetStore.summary,
+            func.count(ImageEmbeddingStore.chunk_id).label("ocr_chunks"),
+        )
+        .outerjoin(ImageEmbeddingStore, ImageEmbeddingStore.asset_id == ImageAssetStore.asset_id)
+        .group_by(
+            ImageAssetStore.asset_id,
+            ImageAssetStore.source_key,
+            ImageAssetStore.asset_name,
+            ImageAssetStore.asset_kind,
+            ImageAssetStore.page_number,
+            ImageAssetStore.ocr_engine,
+            ImageAssetStore.summary,
+        )
+        .order_by(ImageAssetStore.source_key, ImageAssetStore.page_number, ImageAssetStore.asset_name)
+        .limit(limit)
+    )
+
+    if source:
+        stmt = stmt.where(ImageAssetStore.source_key.ilike(f"%{source}%"))
+    if page is not None:
+        stmt = stmt.where(ImageAssetStore.page_number == page)
+
+    with Session(engine) as session:
+        rows = session.execute(stmt).all()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        preview = (row.summary or "")[:preview_chars] if row.summary else None
+        items.append(
+            {
+                "asset_id": str(row.asset_id),
+                "source": row.source,
+                "asset_name": row.asset_name,
+                "asset_kind": row.asset_kind,
+                "page": row.page,
+                "ocr_engine": row.ocr_engine,
+                "ocr_chunks": int(row.ocr_chunks or 0),
+                "ocr_preview": preview,
+            }
+        )
+    return items

@@ -12,7 +12,8 @@ def ingest(path: str, reset: bool = False, source_override: str | None = None):
     for result in results:
         print(
             f"  {result.filename}: status={result.status}, "
-            f"chunks={result.chunks_written}, paginas={result.page_count}, resumo={result.summary_updated}"
+            f"chunks={result.chunks_written}, paginas={result.page_count}, imagens={result.image_assets}, "
+            f"ocr_chunks={result.ocr_chunks_written}, resumo={result.summary_updated}"
         )
 
     if not results:

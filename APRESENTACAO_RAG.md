@@ -243,6 +243,12 @@ São menos de ~50 documentos curtos?
 - `create_retrieval_chain` monta o fluxo completo.
 - Alternativa para indexação rica: **LlamaIndex** (melhor para estruturas de documento complexas).
 
+### OCR multimodal local — GLM OCR + Chandra 2
+- Modelos OCR locais entram para screenshots, figuras e PDFs com conteúdo visual relevante.
+- Cada imagem extraída vira um **asset relacionado ao documento pai** por arquivo e página.
+- O banco salva: **nome da imagem, bytes, texto OCR, embedding próprio e metadados**.
+- Na consulta, os chunks OCR concorrem com os chunks textuais no mesmo retrieval híbrido.
+
 ### Modelo de Embedding — nomic-embed-text
 - 768 dimensões, roda local via **Ollama** (sem custo de API).
 - Alternativa paga com maior qualidade: `text-embedding-3-small` (OpenAI, 1536 dims).
@@ -321,20 +327,23 @@ Avaliação humana                   → decisões de arquitetura e roadmap
 - **Avaliação automatizada:** pipeline RAGAS rodando em CI para cada mudança.
 
 ### Longo prazo
-- **Multimodal RAG:** indexar imagens, screenshots, diagramas com modelos Vision.
+- **Multimodal RAG completo:** expandir de OCR textual para captions, diagramas e page-renders de documentos inteiros.
 - **REFRAG:** compressão de contexto para queries com muitos documentos (Meta, 2025).
-- **OCR integrado:** Chandra 2 / MonkeyOCR para processar screenshots e PDFs escaneados como JSON estruturado.
+- **OCR local integrado:** consolidar GLM OCR + Chandra 2 em todos os fluxos visuais do corpus.
 
 ---
 
 ## 13. Cenário Escolhido Neste Projeto
 
 ### Escolha
-- **Advanced RAG híbrido, hierárquico e coverage-aware**, com **LangChain** como pipeline principal.
+- **Advanced RAG híbrido, hierárquico, coverage-aware e multimodal leve**, com **LangChain** como pipeline principal.
 
 ### O que entrou na implementação
 - **Retrieval denso + busca lexical** com fusão por **RRF**.
 - **Resumo por documento + chunks detalhados** para perguntas amplas sem custo de long context.
+- **OCR local para imagens** com GLM OCR + Chandra 2 quando houver evidência visual relevante.
+- **Tabela relacional para imagens extraídas**, com nome da imagem, bytes, texto OCR e embedding próprio.
+- **Relação com o documento principal** por `source` e página, para recuperar texto e imagem no mesmo fluxo.
 - **Coverage mode** para triagem por documento antes de buscar os trechos finos.
 - **Resposta com fontes obrigatórias** e metadados de retrieval na API.
 - **Ingestão por documento com hash**, sem apagar a coleção inteira a cada arquivo novo.
@@ -342,6 +351,7 @@ Avaliação humana                   → decisões de arquitetura e roadmap
 ### Por que esse foi o melhor cenário
 - **Maior precisão** que o RAG ingênuo sem depender de um agente completo em toda consulta.
 - **Menor risco de perder documento relevante**, porque toda a base pode ser triada primeiro no nível de resumo.
+- **Menor risco de perder evidência visual**, porque imagens relevantes também entram no índice com OCR e embedding.
 - **Menos alucinação**, porque a resposta vem ancorada em contexto recuperado e retorna fonte.
 - **Custo e latência controlados**, bem abaixo de long context bruto ou loops agênticos permanentes.
 

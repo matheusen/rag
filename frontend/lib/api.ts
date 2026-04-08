@@ -33,6 +33,7 @@ export interface QuerySource {
   source: string;
   page: number | null;
   kind: string;
+  asset_name?: string | null;
   score: number | null;
 }
 
@@ -46,6 +47,9 @@ export interface QueryRetrievalMetadata {
   chunks_used: number | null;
   dense_hits: number | null;
   lexical_hits: number | null;
+  asset_dense_hits?: number | null;
+  asset_lexical_hits?: number | null;
+  image_chunks_used?: number | null;
   selected_documents: string[];
   notes: string[];
 }

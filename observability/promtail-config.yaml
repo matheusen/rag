@@ -43,17 +43,26 @@ scrape_configs:
             logger: name
             message: message
             timestamp: asctime
+            trace_id: trace_id
+            span_id: span_id
+            service: service
 
       # 2. Promove campos a labels Loki (mantém poucos labels — Loki é sensível a cardinalidade)
       - labels:
           level:
           logger:
+          service:
 
       # 3. Define o timestamp real do log (para ordenação correta)
       - timestamp:
           source: timestamp
           format: "2006-01-02 15:04:05,000"   # formato do python logging
 
-      # 4. Define o conteúdo visível da linha no Grafana
+      # 4. Renderiza uma linha legível sem perder trace_id/span_id para correlação
+      - template:
+          source: rendered
+          template: '{{ .level }} {{ .logger }} service={{ .service }} trace_id={{ .trace_id }} span_id={{ .span_id }} {{ .message }}'
+
+      # 5. Define o conteúdo visível da linha no Grafana
       - output:
-          source: message
+          source: rendered

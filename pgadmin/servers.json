@@ -1,0 +1,20 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "RAG PostgreSQL 16",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "postgres",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "PasswordExecCommand": "echo postgres",
+      "PasswordExecExpiration": 3600,
+      "ConnectionParameters": {
+        "connect_timeout": 10,
+        "sslmode": "prefer"
+      },
+      "Comment": "Servidor PostgreSQL 16 do docker-compose com pgvector"
+    }
+  }
+}

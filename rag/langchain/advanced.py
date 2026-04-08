@@ -16,17 +16,20 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from rag.langchain.ocr import IMAGE_EXTENSIONS, OCRAsset, extract_ocr_assets
 
 load_dotenv()
 
 COLLECTION_NAME = "lc_documents"
 SUMMARY_TABLE = "rag_document_registry"
+IMAGE_ASSET_TABLE = "rag_document_image_asset"
+IMAGE_EMBEDDING_TABLE = "rag_document_image_embedding"
 EMBEDDING_DIMENSIONS = 768
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 RRF_K = 60
 SUMMARY_BACKFILL_CHUNKS = 8
-SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".rst"}
+SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".rst"} | IMAGE_EXTENSIONS
 
 
 @dataclass(slots=True)
@@ -37,6 +40,8 @@ class DocumentIngestResult:
     chunks_written: int
     page_count: int
     summary_updated: bool
+    image_assets: int = 0
+    ocr_chunks_written: int = 0
 
 
 @dataclass(slots=True)
@@ -57,6 +62,9 @@ class ChunkCandidate:
     source: str
     page: int | None
     text: str
+    kind: str = "chunk"
+    asset_name: str | None = None
+    ocr_engine: str | None = None
     dense_score: float | None = None
     lexical_score: float | None = None
     fused_score: float = 0.0
@@ -123,6 +131,10 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _hash_file_bytes(file_path: str) -> str:
+    return hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
+
+
 def _embedder() -> OllamaEmbeddings:
     return OllamaEmbeddings(
         model=os.environ["OLLAMA_EMBEDDING_MODEL"],
@@ -141,6 +153,7 @@ def _llm() -> ChatOllama:
 def ensure_supporting_schema() -> None:
     with psycopg.connect(_dsn()) as conn:
         with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {SUMMARY_TABLE} (
@@ -173,6 +186,102 @@ def ensure_supporting_schema() -> None:
                         'simple',
                         coalesce(display_name, '') || ' ' || coalesce(summary, '')
                     )
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {IMAGE_ASSET_TABLE} (
+                    asset_id UUID PRIMARY KEY,
+                    source_key TEXT NOT NULL,
+                    asset_name TEXT NOT NULL,
+                    asset_kind TEXT NOT NULL,
+                    page_number INTEGER,
+                    asset_index INTEGER NOT NULL DEFAULT 0,
+                    content_hash TEXT NOT NULL,
+                    mime_type TEXT,
+                    image_bytes BYTEA,
+                    ocr_engine TEXT,
+                    ocr_text TEXT,
+                    summary TEXT,
+                    metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS rag_document_image_asset_source_hash_uidx
+                ON {IMAGE_ASSET_TABLE} (source_key, content_hash)
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS rag_document_image_asset_source_page_idx
+                ON {IMAGE_ASSET_TABLE} (source_key, page_number)
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {IMAGE_EMBEDDING_TABLE} (
+                    chunk_id TEXT PRIMARY KEY,
+                    asset_id UUID NOT NULL REFERENCES {IMAGE_ASSET_TABLE}(asset_id) ON DELETE CASCADE,
+                    source_key TEXT NOT NULL,
+                    page_number INTEGER,
+                    asset_name TEXT NOT NULL,
+                    asset_kind TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL DEFAULT 0,
+                    ocr_engine TEXT,
+                    content TEXT NOT NULL,
+                    embedding VECTOR({EMBEDDING_DIMENSIONS}),
+                    metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS rag_document_image_embedding_source_idx
+                ON {IMAGE_EMBEDDING_TABLE} (source_key, page_number)
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS rag_document_image_embedding_hnsw_idx
+                ON {IMAGE_EMBEDDING_TABLE}
+                USING hnsw (embedding vector_cosine_ops)
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS rag_document_image_embedding_fts_idx
+                ON {IMAGE_EMBEDDING_TABLE}
+                USING gin (
+                    to_tsvector(
+                        'simple',
+                        coalesce(source_key, '') || ' ' || coalesce(asset_name, '') || ' ' || coalesce(content, '')
+                    )
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS langchain_pg_collection (
+                    uuid UUID PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    cmetadata JSONB
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS langchain_pg_embedding (
+                    id TEXT PRIMARY KEY,
+                    collection_id UUID REFERENCES langchain_pg_collection(uuid) ON DELETE CASCADE,
+                    embedding VECTOR({EMBEDDING_DIMENSIONS}),
+                    document TEXT,
+                    cmetadata JSONB
                 )
                 """
             )
@@ -233,6 +342,9 @@ def _resolve_files(path: str) -> list[Path]:
 
 def _load_documents(file_path: str, source_key: str) -> list[Document]:
     path = Path(file_path)
+    if path.suffix.lower() in IMAGE_EXTENSIONS:
+        return []
+
     if path.suffix.lower() == ".pdf":
         loader = PyPDFLoader(str(path))
     else:
@@ -305,6 +417,16 @@ def _delete_source_chunks(cur: psycopg.Cursor, source_key: str) -> None:
     )
 
 
+def _delete_source_image_assets(cur: psycopg.Cursor, source_key: str) -> None:
+    cur.execute(
+        f"""
+        DELETE FROM {IMAGE_ASSET_TABLE}
+        WHERE source_key = %s
+        """,
+        (source_key,),
+    )
+
+
 def _existing_document(cur: psycopg.Cursor, source_key: str) -> dict[str, Any] | None:
     cur.execute(
         f"""
@@ -349,6 +471,134 @@ def _insert_chunks(
                 json.dumps(metadata),
             ),
         )
+
+
+def _insert_image_assets(
+    cur: psycopg.Cursor,
+    *,
+    ocr_assets: list[OCRAsset],
+    embedder: OllamaEmbeddings,
+    splitter: RecursiveCharacterTextSplitter,
+) -> tuple[int, int]:
+    total_assets = 0
+    total_chunks = 0
+
+    for asset_index, asset in enumerate(ocr_assets, start=1):
+        asset_id = str(uuid.uuid4())
+        asset_metadata = {
+            key: _sanitize(value) if isinstance(value, str) else value
+            for key, value in (asset.metadata or {}).items()
+        }
+        asset_metadata.update(
+            {
+                "source": asset.source_key,
+                "page": asset.page_number,
+                "asset_name": asset.asset_name,
+                "asset_kind": asset.asset_kind,
+                "ocr_engine": asset.ocr_engine,
+            }
+        )
+
+        cur.execute(
+            f"""
+            INSERT INTO {IMAGE_ASSET_TABLE} (
+                asset_id,
+                source_key,
+                asset_name,
+                asset_kind,
+                page_number,
+                asset_index,
+                content_hash,
+                mime_type,
+                image_bytes,
+                ocr_engine,
+                ocr_text,
+                summary,
+                metadata,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            """,
+            (
+                asset_id,
+                asset.source_key,
+                asset.asset_name,
+                asset.asset_kind,
+                asset.page_number,
+                asset_index,
+                asset.content_hash,
+                asset.mime_type,
+                psycopg.Binary(asset.image_bytes),
+                asset.ocr_engine,
+                _sanitize(asset.text),
+                _sanitize(asset.summary),
+                json.dumps(asset_metadata),
+            ),
+        )
+
+        asset_documents = splitter.create_documents(
+            [_sanitize(asset.text)],
+            metadatas=[
+                {
+                    "source": asset.source_key,
+                    "page": asset.page_number,
+                    "asset_name": asset.asset_name,
+                    "asset_kind": asset.asset_kind,
+                    "ocr_engine": asset.ocr_engine,
+                }
+            ],
+        )
+        if not asset_documents:
+            total_assets += 1
+            continue
+
+        batch_size = 24
+        for batch_start in range(0, len(asset_documents), batch_size):
+            batch = asset_documents[batch_start:batch_start + batch_size]
+            batch_texts = [_sanitize(document.page_content) for document in batch]
+            embeddings_list = embedder.embed_documents(batch_texts)
+
+            for chunk_offset, (document, embedding) in enumerate(zip(batch, embeddings_list), start=batch_start):
+                chunk_metadata = {
+                    key: _sanitize(value) if isinstance(value, str) else value
+                    for key, value in (document.metadata or {}).items()
+                }
+                cur.execute(
+                    f"""
+                    INSERT INTO {IMAGE_EMBEDDING_TABLE} (
+                        chunk_id,
+                        asset_id,
+                        source_key,
+                        page_number,
+                        asset_name,
+                        asset_kind,
+                        chunk_index,
+                        ocr_engine,
+                        content,
+                        embedding,
+                        metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        asset_id,
+                        asset.source_key,
+                        asset.page_number,
+                        asset.asset_name,
+                        asset.asset_kind,
+                        chunk_offset,
+                        asset.ocr_engine,
+                        _sanitize(document.page_content),
+                        str(embedding),
+                        json.dumps(chunk_metadata),
+                    ),
+                )
+                total_chunks += 1
+
+        total_assets += 1
+
+    return total_assets, total_chunks
 
 
 def _upsert_document_registry(
@@ -421,10 +671,8 @@ def ingest_path(
 
             for file_path in files:
                 source_key = _normalize_source(str(file_path), root=root, source_override=source_override)
-                documents = _load_documents(str(file_path), source_key)
-                full_text = _document_text(documents)
-                content_hash = _hash_text(full_text)
                 existing = _existing_document(cur, source_key)
+                content_hash = _hash_file_bytes(str(file_path))
 
                 if existing and existing["content_hash"] == content_hash and not reset:
                     results.append(
@@ -433,13 +681,20 @@ def ingest_path(
                             filename=file_path.name,
                             status="skipped",
                             chunks_written=0,
-                            page_count=len(documents),
+                            page_count=existing["page_count"],
                             summary_updated=False,
                         )
                     )
                     continue
 
+                documents = _load_documents(str(file_path), source_key)
+                full_text = _document_text(documents)
+                ocr_assets = extract_ocr_assets(str(file_path), source_key)
+                ocr_text = "\n\n".join(asset.text for asset in ocr_assets if asset.text.strip())
+                combined_text = "\n\n".join(part for part in [full_text, ocr_text] if part).strip()
+
                 _delete_source_chunks(cur, source_key)
+                _delete_source_image_assets(cur, source_key)
                 chunks = splitter.split_documents(documents)
                 for chunk in chunks:
                     chunk.metadata = dict(chunk.metadata or {})
@@ -455,14 +710,25 @@ def ingest_path(
                     _insert_chunks(cur, collection_id, batch, embeddings_list)
                     total_written += len(batch)
 
-                summary = _summarize_document(source_key, full_text)
+                image_assets_written, ocr_chunks_written = _insert_image_assets(
+                    cur,
+                    ocr_assets=ocr_assets,
+                    embedder=embedder,
+                    splitter=splitter,
+                )
+
+                summary = _summarize_document(source_key, combined_text)
                 summary_embedding = embedder.embed_query(summary)
+                page_count = len(documents)
+                if page_count == 0:
+                    pages = [asset.page_number for asset in ocr_assets if asset.page_number is not None]
+                    page_count = max(pages) if pages else 0
                 _upsert_document_registry(
                     cur,
                     source_key=source_key,
                     display_name=file_path.name,
                     content_hash=content_hash,
-                    page_count=len(documents),
+                    page_count=page_count,
                     chunk_count=total_written,
                     summary=summary,
                     summary_embedding=summary_embedding,
@@ -470,6 +736,8 @@ def ingest_path(
                         "source": source_key,
                         "display_name": file_path.name,
                         "suffix": file_path.suffix.lower(),
+                        "image_assets": image_assets_written,
+                        "ocr_chunks": ocr_chunks_written,
                     },
                 )
 
@@ -479,8 +747,10 @@ def ingest_path(
                         filename=file_path.name,
                         status="updated" if existing else "ingested",
                         chunks_written=total_written,
-                        page_count=len(documents),
+                        page_count=page_count,
                         summary_updated=True,
+                        image_assets=image_assets_written,
+                        ocr_chunks_written=ocr_chunks_written,
                     )
                 )
 
@@ -724,6 +994,112 @@ def _chunk_lexical_search(
     ]
 
 
+def _image_dense_search(
+    query_embedding: list[float],
+    limit: int,
+    allowed_sources: list[str] | None = None,
+) -> list[ChunkCandidate]:
+    filters = ["embedding IS NOT NULL"]
+    params: list[Any] = [str(query_embedding)]
+    if allowed_sources:
+        filters.append("source_key = ANY(%s)")
+        params.append(allowed_sources)
+    params.extend([str(query_embedding), limit])
+
+    query = f"""
+        SELECT
+            chunk_id,
+            source_key,
+            page_number,
+            content,
+            asset_name,
+            ocr_engine,
+            1 - (embedding <=> %s::vector) AS dense_score
+        FROM {IMAGE_EMBEDDING_TABLE}
+        WHERE {' AND '.join(filters)}
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+    """
+
+    with psycopg.connect(_dsn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+    return [
+        ChunkCandidate(
+            chunk_id=str(row[0]),
+            source=str(row[1]),
+            page=_page_value(row[2]),
+            text=str(row[3] or ""),
+            kind="image_ocr",
+            asset_name=str(row[4] or "") or None,
+            ocr_engine=str(row[5] or "") or None,
+            dense_score=float(row[6]) if row[6] is not None else None,
+        )
+        for row in rows
+        if row[1]
+    ]
+
+
+def _image_lexical_search(
+    question: str,
+    limit: int,
+    allowed_sources: list[str] | None = None,
+) -> list[ChunkCandidate]:
+    terms = _fts_terms(question)
+    if not terms:
+        return []
+
+    params: list[Any] = [terms]
+    filters = []
+    if allowed_sources:
+        filters.append("source_key = ANY(%s)")
+        params.append(allowed_sources)
+    params.append(limit)
+
+    extra_filter = f" AND {' AND '.join(filters)}" if filters else ""
+    query = f"""
+        WITH query AS (SELECT plainto_tsquery('simple', %s) AS q)
+        SELECT
+            chunk_id,
+            source_key,
+            page_number,
+            content,
+            asset_name,
+            ocr_engine,
+            ts_rank_cd(
+                to_tsvector('simple', coalesce(source_key, '') || ' ' || coalesce(asset_name, '') || ' ' || coalesce(content, '')),
+                query.q
+            ) AS lexical_score
+        FROM {IMAGE_EMBEDDING_TABLE}, query
+        WHERE to_tsvector('simple', coalesce(source_key, '') || ' ' || coalesce(asset_name, '') || ' ' || coalesce(content, '')) @@ query.q
+          {extra_filter}
+        ORDER BY lexical_score DESC
+        LIMIT %s
+    """
+
+    with psycopg.connect(_dsn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+    return [
+        ChunkCandidate(
+            chunk_id=str(row[0]),
+            source=str(row[1]),
+            page=_page_value(row[2]),
+            text=str(row[3] or ""),
+            kind="image_ocr",
+            asset_name=str(row[4] or "") or None,
+            ocr_engine=str(row[5] or "") or None,
+            lexical_score=float(row[6]) if row[6] is not None else None,
+        )
+        for row in rows
+        if row[1]
+    ]
+
+
 def _fuse_rankings(dense: list[Any], lexical: list[Any], key_fn) -> list[Any]:
     fused: dict[str, Any] = {}
     scores: dict[str, float] = defaultdict(float)
@@ -851,17 +1227,25 @@ def _format_chunk_context(chunks: list[ChunkCandidate]) -> str:
     blocks = []
     for index, chunk in enumerate(chunks, start=1):
         page_text = str(chunk.page) if chunk.page is not None else "n/d"
+        label = "OCR de imagem" if chunk.kind == "image_ocr" else "Trecho"
+        lines = [
+            f"[{label} {index}]",
+            f"Arquivo: {chunk.source}",
+            f"Pagina: {page_text}",
+        ]
+        if chunk.asset_name:
+            lines.append(f"Imagem: {chunk.asset_name}")
+        if chunk.ocr_engine:
+            lines.append(f"OCR: {chunk.ocr_engine}")
+        lines.extend(
+            [
+                f"Score hibrido: {chunk.fused_score:.4f}",
+                "Conteudo:",
+                chunk.text,
+            ]
+        )
         blocks.append(
-            "\n".join(
-                [
-                    f"[Trecho {index}]",
-                    f"Arquivo: {chunk.source}",
-                    f"Pagina: {page_text}",
-                    f"Score hibrido: {chunk.fused_score:.4f}",
-                    "Conteudo:",
-                    chunk.text,
-                ]
-            )
+            "\n".join(lines)
         )
     return "\n\n".join(blocks)
 
@@ -890,16 +1274,28 @@ def query_with_hybrid_strategy(
         summary_candidates = _fuse_rankings(dense_summaries, lexical_summaries, key_fn=lambda item: item.source)
         selected_sources = [candidate.source for candidate in summary_candidates[: min(summary_k, len(summary_candidates), max(k, 3))]]
 
-    dense_chunks = _chunk_dense_search(
+    dense_text_chunks = _chunk_dense_search(
         query_embedding,
         limit=max(candidate_pool, k),
         allowed_sources=selected_sources or None,
     )
-    lexical_chunks = _chunk_lexical_search(
+    lexical_text_chunks = _chunk_lexical_search(
         question,
         limit=max(lexical_pool, k),
         allowed_sources=selected_sources or None,
     )
+    dense_image_chunks = _image_dense_search(
+        query_embedding,
+        limit=max(candidate_pool, k),
+        allowed_sources=selected_sources or None,
+    )
+    lexical_image_chunks = _image_lexical_search(
+        question,
+        limit=max(lexical_pool, k),
+        allowed_sources=selected_sources or None,
+    )
+    dense_chunks = dense_text_chunks + dense_image_chunks
+    lexical_chunks = lexical_text_chunks + lexical_image_chunks
     fused_chunks = _fuse_rankings(dense_chunks, lexical_chunks, key_fn=lambda item: item.chunk_id)
     context_chunks = _rerank_chunks(fused_chunks, source_priority=selected_sources, k=k)
     context_summaries = summary_candidates[: min(3, len(summary_candidates))] if effective_coverage else []
@@ -911,7 +1307,7 @@ def query_with_hybrid_strategy(
             "framework": "langchain",
             "sources": [],
             "retrieval": {
-                "strategy": "advanced_hybrid_hierarchical_langchain",
+                "strategy": "advanced_hybrid_hierarchical_multimodal_langchain",
                 "coverage_mode": effective_coverage,
                 "documents_total": total_documents,
                 "documents_screened": total_documents if effective_coverage else 0,
@@ -920,6 +1316,9 @@ def query_with_hybrid_strategy(
                 "chunks_used": 0,
                 "dense_hits": len(dense_chunks),
                 "lexical_hits": len(lexical_chunks),
+                "asset_dense_hits": len(dense_image_chunks),
+                "asset_lexical_hits": len(lexical_image_chunks),
+                "image_chunks_used": 0,
                 "selected_documents": [],
                 "notes": ["Nenhum documento recuperado para a pergunta."],
             },
@@ -934,6 +1333,7 @@ def query_with_hybrid_strategy(
         "Voce e um assistente especializado em RAG. "
         "Responda somente com base no contexto fornecido. "
         "Se o contexto nao sustentar a resposta, diga explicitamente que nao sabe. "
+        "O contexto pode combinar trechos textuais normais e trechos extraidos de imagens via OCR. "
         "Quando usar uma fonte, cite arquivo e pagina dentro do texto. "
         "Ao final, adicione uma secao chamada 'Fontes utilizadas' com a lista das fontes realmente usadas.\n\n"
         f"Contexto:\n{context}\n\nPergunta: {question}"
@@ -957,7 +1357,7 @@ def query_with_hybrid_strategy(
         )
 
     for chunk in context_chunks:
-        key = (chunk.source, chunk.page, "chunk")
+        key = (chunk.source, chunk.page, chunk.kind, chunk.asset_name)
         if key in seen_sources:
             continue
         seen_sources.add(key)
@@ -965,7 +1365,8 @@ def query_with_hybrid_strategy(
             {
                 "source": chunk.source,
                 "page": chunk.page,
-                "kind": "chunk",
+                "kind": chunk.kind,
+                "asset_name": chunk.asset_name,
                 "score": round(chunk.fused_score, 6),
             }
         )
@@ -976,7 +1377,7 @@ def query_with_hybrid_strategy(
         "framework": "langchain",
         "sources": source_rows,
         "retrieval": {
-            "strategy": "advanced_hybrid_hierarchical_langchain",
+            "strategy": "advanced_hybrid_hierarchical_multimodal_langchain",
             "coverage_mode": effective_coverage,
             "documents_total": total_documents,
             "documents_screened": total_documents if effective_coverage else 0,
@@ -985,9 +1386,13 @@ def query_with_hybrid_strategy(
             "chunks_used": len(context_chunks),
             "dense_hits": len(dense_chunks),
             "lexical_hits": len(lexical_chunks),
+            "asset_dense_hits": len(dense_image_chunks),
+            "asset_lexical_hits": len(lexical_image_chunks),
+            "image_chunks_used": len([chunk for chunk in context_chunks if chunk.kind == "image_ocr"]),
             "selected_documents": selected_sources,
             "notes": [
                 "Dense retrieval + busca lexical com fusao RRF.",
+                "Chunks OCR de imagens entram como candidatos adicionais ligados ao mesmo documento e pagina.",
                 "Coverage mode usa resumo por documento antes da busca detalhada." if effective_coverage else "Coverage mode automatico nao foi ativado para esta pergunta.",
             ],
         },

@@ -2,7 +2,7 @@
 
 Projeto de RAG com dois fluxos paralelos para comparacao e aprendizado:
 
-- **LangChain** — pipeline principal com ingestão segura por documento, índice de resumos, retrieval híbrido e coverage mode
+- **LangChain** — pipeline principal com ingestão segura por documento, índice de resumos, OCR local para imagens, retrieval híbrido e coverage mode
 - **LlamaIndex** — baseline vetorial com `PGVectorStore` + `RetrieverQueryEngine`
 
 Ambos usam:
@@ -29,6 +29,8 @@ O que entra nesse cenário:
 
 - **retrieval denso + busca lexical** com fusão por **RRF**
 - **resumo por documento + chunks detalhados** para cobrir perguntas amplas sem mandar tudo ao LLM
+- **OCR local com GLM + Chandra 2** para imagens e páginas visualmente ricas
+- **tabelas relacionais para imagens OCR + embeddings próprios**, ligadas ao documento pai por `source_key` e página
 - **coverage mode** para triagem por documento antes da busca detalhada
 - **resposta com fontes obrigatórias** e metadados de retrieval na API
 - **ingestão por documento com hash**, sem apagar a coleção inteira a cada novo arquivo
@@ -54,6 +56,7 @@ O que não virou padrão inicial:
 rag/
 ├── api/
 │   ├── main.py              — FastAPI, CORS, OTel, Prometheus /metrics
+│   ├── Dockerfile           — imagem da API para o docker compose
 │   ├── telemetry.py         — setup OpenTelemetry + logging JSON
 │   ├── schemas.py           — modelos Pydantic
 │   └── routers/
@@ -62,8 +65,9 @@ rag/
 │       └── sqlalchemy.py    — endpoints /sqlalchemy/*
 ├── rag/
 │   ├── langchain/
-│   │   ├── advanced.py      — ingestão segura, summaries, retrieval híbrido e coverage mode
+│   │   ├── advanced.py      — ingestão segura, OCR relacional, retrieval híbrido e coverage mode
 │   │   ├── ingest.py        — wrapper CLI/API para ingestão por documento
+│   │   ├── ocr.py           — extração de imagens + roteamento OCR local
 │   │   └── query.py         — consulta avançada com fontes e metadados
 │   └── llamaindex/
 │       ├── ingest.py        — ingestão PDF → nodes → PGVectorStore
@@ -80,6 +84,7 @@ rag/
 │   ├── promtail-config.yaml
 │   ├── prometheus.yml
 │   └── grafana/provisioning/datasources/datasources.yaml
+├── requirements-ocr.txt     — dependências opcionais para GLM OCR + Chandra 2
 ├── artigos/                 — PDFs da base documental
 ├── logs/                    — logs JSON do FastAPI (lidos pelo Promtail)
 ├── docker-compose.yml       — todos os serviços
@@ -102,19 +107,31 @@ O `docker-compose.yml` sobe todos os serviços necessários:
 
 | Container | Imagem | Porta | Função |
 |---|---|---|---|
-| `tabzer-postgres` | pgvector/pgvector:pg16 | 5433 | PostgreSQL + pgvector |
-| `ragops-ollama` | ollama/ollama:latest | 11434 | LLMs locais |
-| `ragops-otel-collector` | otel/opentelemetry-collector-contrib | 4317, 4318 | Hub de traces |
-| `ragops-jaeger` | jaegertracing/all-in-one | 16686 | UI de traces |
-| `ragops-tempo` | grafana/tempo:2.7.2 | 3200 | Backend de traces |
-| `ragops-prometheus` | prom/prometheus | 9090 | Coleta de métricas |
-| `ragops-loki` | grafana/loki | 3100 | Agregação de logs |
-| `ragops-promtail` | grafana/promtail | — | Agente de coleta de logs |
-| `ragops-grafana` | grafana/grafana | 3030 | UI unificada |
+| `rag-postgres` | pgvector/pgvector:pg16 | 5433 | PostgreSQL + pgvector |
+| `rag-ollama` | ollama/ollama:latest | 11434 | LLMs locais |
+| `rag-api` | build local (`api/Dockerfile`) | 8000 | FastAPI na mesma rede da observabilidade |
+| `rag-otel-collector` | otel/opentelemetry-collector-contrib | 4317, 4318, 8888, 8889 | Hub de traces + spanmetrics |
+| `rag-jaeger` | jaegertracing/all-in-one | 16686 | UI de traces |
+| `rag-tempo` | grafana/tempo:2.7.2 | 3200 | Backend de traces |
+| `rag-prometheus` | prom/prometheus | 9090 | Coleta de métricas |
+| `rag-loki` | grafana/loki | 3100 | Agregação de logs |
+| `rag-promtail` | grafana/promtail | — | Agente de coleta de logs |
+| `rag-grafana` | grafana/grafana | 3030 | UI unificada |
+| `rag-pgadmin` | dpage/pgadmin4:latest | 5050 | UI web para administrar o PostgreSQL 16 |
 
 ```powershell
 docker compose up -d
 ```
+
+UIs principais após o boot:
+
+- API: http://localhost:8000/docs
+- Grafana: http://localhost:3030
+- Jaeger: http://localhost:16686
+- Prometheus: http://localhost:9090
+- pgAdmin: http://localhost:5050
+- Abre em modo desktop, sem tela de login separada
+- O servidor `RAG PostgreSQL 16` já aparece pré-configurado e detecta automaticamente o PostgreSQL 16 do container.
 
 Verificar se todos estão rodando:
 
@@ -130,16 +147,16 @@ Na primeira vez, é necessário baixar os modelos dentro do container:
 
 ```powershell
 # Modelo de embeddings (768 dimensões — compatível com o schema do pgvector)
-docker exec ragops-ollama ollama pull nomic-embed-text
+docker exec rag-ollama ollama pull nomic-embed-text
 
 # LLM para geração de respostas
-docker exec ragops-ollama ollama pull llama3.2
+docker exec rag-ollama ollama pull llama3.2
 ```
 
 Verificar modelos disponíveis:
 
 ```powershell
-docker exec ragops-ollama ollama list
+docker exec rag-ollama ollama list
 ```
 
 ---
@@ -150,6 +167,9 @@ docker exec ragops-ollama ollama list
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+
+# Opcional: OCR local para imagens e PDFs escaneados
+pip install -r requirements-ocr.txt
 ```
 
 ---
@@ -171,14 +191,24 @@ OLLAMA_LLM_MODEL=llama3.2
 # OpenTelemetry
 OTEL_SERVICE_NAME=rag-system
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+
+# OCR local (opcional)
+RAG_OCR_ENABLED=true
+RAG_OCR_BACKENDS=chandra2,glm
+RAG_OCR_CHANDRA_ENABLED=true
+RAG_OCR_GLM_ENABLED=true
+RAG_OCR_GLM_MODEL_ID=seu-modelo-glm-ocr-local-no-hf
+RAG_OCR_LOCAL_FILES_ONLY=true
 ```
+
+No `docker compose`, a API sobrescreve automaticamente `POSTGRES_HOST`, `OLLAMA_BASE_URL`, `OTEL_EXPORTER_OTLP_ENDPOINT` e `OTEL_SERVICE_NAME` para usar os nomes internos da rede Docker.
 
 ---
 
 ## 5. Habilitar a extensão pgvector
 
 ```powershell
-docker exec tabzer-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker exec rag-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 Verificar:
@@ -191,7 +221,7 @@ SELECT extname FROM pg_extension WHERE extname = 'vector';
 
 ## 6. Ingestão de documentos
 
-Coloque PDFs na pasta `artigos/` e execute:
+Coloque documentos na pasta `artigos/` e execute. O pipeline do LangChain agora aceita PDF, texto e imagens (`png`, `jpg`, `webp`, `tiff`). Quando OCR local estiver configurado, imagens extraídas do PDF e arquivos de imagem geram registros próprios em tabelas relacionais com embeddings separados.
 
 ### LangChain
 
@@ -217,9 +247,23 @@ Ingerir um único PDF:
 .\.venv\Scripts\python.exe -m rag.langchain.ingest ".\artigos\meu-artigo.pdf"
 ```
 
+Ingerir uma imagem isolada com OCR:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag.langchain.ingest ".\artigos\screenshot-erro.png"
+```
+
 ---
 
-## 7. Subir a API FastAPI
+## 7. API FastAPI
+
+Ao subir o `docker compose`, a API já entra na mesma rede do PostgreSQL, Ollama, OTel Collector, Prometheus, Loki e Grafana.
+
+```powershell
+docker compose up -d api
+```
+
+Se preferir rodar a API fora do Docker durante desenvolvimento:
 
 ```powershell
 .\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000
@@ -319,7 +363,7 @@ FastAPI (8000)
 ### Ver traces no Jaeger
 
 1. Abra `http://localhost:16686`
-2. Em **Service** selecione `rag-system`
+2. Em **Service** selecione `rag-api`
 3. Clique **Find Traces**
 4. Clique em qualquer trace para ver os spans aninhados
 
@@ -336,7 +380,7 @@ HTTP POST /langchain/query          (FastAPIInstrumentor)
 
 1. Abra `http://localhost:3030`
 2. Vá em **Explore** → selecione datasource **Tempo**
-3. Use **Search** → Service Name: `rag-system`
+3. Use **Search** → Service Name: `rag-api`
 4. Clique num trace para ver o flamegraph de spans
 
 Diferencial do Tempo vs Jaeger: ao clicar num span, aparece botão **Logs** que abre os logs do mesmo período no Loki (correlação automática).
@@ -399,7 +443,7 @@ Ao ver um log no Loki que contenha `trace_id`, aparece um botão **Tempo** para 
 Abrir shell SQL:
 
 ```powershell
-docker exec -it tabzer-postgres psql -U postgres -d ragsys
+docker exec -it rag-postgres psql -U postgres -d ragsys
 ```
 
 ### Ver artigos ingeridos
@@ -436,7 +480,7 @@ LIMIT 4;
 ### Contagem geral
 
 ```powershell
-docker exec tabzer-postgres psql -U postgres -d ragsys `
+docker exec rag-postgres psql -U postgres -d ragsys `
     -c "SELECT COUNT(*) FROM langchain_pg_embedding;"
 ```
 
@@ -449,8 +493,8 @@ docker exec tabzer-postgres psql -U postgres -d ragsys `
 docker compose up -d
 
 # 2. Baixar modelos Ollama (primeira vez)
-docker exec ragops-ollama ollama pull nomic-embed-text
-docker exec ragops-ollama ollama pull llama3.2
+docker exec rag-ollama ollama pull nomic-embed-text
+docker exec rag-ollama ollama pull llama3.2
 
 # 3. Ambiente Python
 python -m venv .venv
@@ -458,15 +502,12 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 4. Extensão pgvector
-docker exec tabzer-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker exec rag-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # 5. Ingestão
 .\.venv\Scripts\python.exe -m rag.langchain.ingest artigos
 
-# 6. API
-.\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000
-
-# 7. Frontend (outro terminal)
+# 6. Frontend (outro terminal)
 cd frontend; npm install; npm run dev
 ```
 
@@ -489,6 +530,8 @@ Acessos após o boot:
 | `langchain_pg_collection` | LangChain | namespaces de coleções |
 | `langchain_pg_embedding` | LangChain | chunks + embeddings + metadados |
 | `rag_document_registry` | LangChain | registro por documento com hash, resumo e embedding do resumo |
+| `rag_document_image_asset` | LangChain | imagens extraídas + OCR + vínculo com documento pai |
+| `rag_document_image_embedding` | LangChain | chunks OCR de imagem com embeddings próprios |
 | `llamaindex_documents` | LlamaIndex | nodes + embeddings |
 
-Cada artigo PDF gera múltiplos chunks. Um chunk = uma linha + um vetor de 768 dimensões.
+Cada artigo PDF gera múltiplos chunks. Imagens relevantes entram em tabelas próprias e são recuperadas junto com os chunks textuais pelo mesmo retrieval híbrido.

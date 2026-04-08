@@ -3,10 +3,10 @@
 # Stack de Observabilidade completa:
 #
 #   Traces  → OTel Collector → Jaeger (UI: 16686)
-#                           → Grafana Tempo (via Grafana: 3000)
-#   Metrics → Prometheus (9090) ← scrape /metrics do FastAPI
+#                           → Grafana Tempo (via Grafana: 3030)
+#   Metrics → Prometheus (9090) ← scrape /metrics do FastAPI em Docker
 #   Logs    → Promtail → Loki ← Grafana
-#   UI      → Grafana (3000) — dashboards unificados
+#   UI      → Grafana (3030) — dashboards unificados
 #
 # Fluxo de traces:
 #   FastAPI app → OTLP HTTP (4318) → otel-collector → jaeger:4317 (interno)
@@ -16,15 +16,17 @@
 #   docker compose up -d
 #
 # UIs:
-#   Grafana  : http://localhost:3000  (admin/admin)
+#   API      : http://localhost:8000
+#   Grafana  : http://localhost:3030
 #   Jaeger   : http://localhost:16686
 #   Prometheus: http://localhost:9090
+#   pgAdmin  : http://localhost:5050  (admin@example.com / postgres)
 
 services:
   # ── Banco de dados ──────────────────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: tabzer-postgres
+    container_name: rag-postgres
     restart: unless-stopped
     ports:
       - "5433:5432"
@@ -35,15 +37,67 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # ── pgAdmin 4 — interface web para o PostgreSQL 16 ─────────────────────────
+  # O pgAdmin não precisa de uma versão "casada" com o PostgreSQL por major,
+  # apenas de uma release recente. Ao conectar no serviço `postgres`, ele vai
+  # detectar automaticamente que o servidor é PostgreSQL 16.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: rag-pgadmin
+    restart: unless-stopped
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: postgres
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_DISABLE_POSTFIX: "True"
+    volumes:
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+
   # ── LLMs locais ─────────────────────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
-    container_name: ragops-ollama
+    container_name: rag-ollama
     restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+
+  # ── API FastAPI — roda na mesma rede da observabilidade ───────────────────
+  # Com isso, Prometheus, OTel Collector e Promtail enxergam a app sem usar
+  # host.docker.internal. Ao abrir o Grafana, traces/logs/metrics ja entram
+  # pela mesma topologia.
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: rag-api
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      APP_ENV: docker
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      OLLAMA_BASE_URL: http://ollama:11434
+      OTEL_SERVICE_NAME: rag-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    volumes:
+      - ./logs:/app/logs
+      - ./artigos:/app/artigos
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - ollama
+      - otel-collector
 
   # ── OTel Collector — hub central de telemetria ──────────────────────────────
   # Recebe traces da app (OTLP) e distribui para Jaeger e Tempo.
@@ -51,7 +105,7 @@ services:
   # alterar código da app.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
-    container_name: ragops-otel-collector
+    container_name: rag-otel-collector
     restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
@@ -60,6 +114,7 @@ services:
       - "4317:4317"   # OTLP gRPC  (FastAPI → Collector)
       - "4318:4318"   # OTLP HTTP  (FastAPI → Collector, usado pelo SDK Python)
       - "8888:8888"   # métricas internas do Collector (Prometheus scrape)
+      - "8889:8889"   # spanmetrics exportadas para Prometheus
     depends_on:
       - jaeger
       - tempo
@@ -69,7 +124,7 @@ services:
   # NÃO expõe 4317/4318 ao host — o Collector é o único entry point externo.
   jaeger:
     image: jaegertracing/all-in-one:latest
-    container_name: ragops-jaeger
+    container_name: rag-jaeger
     restart: unless-stopped
     ports:
       - "16686:16686"   # Jaeger UI
@@ -81,7 +136,7 @@ services:
   # Diferencial: correlação nativa com Loki (clica no span → vê logs relacionados)
   tempo:
     image: grafana/tempo:2.7.2
-    container_name: ragops-tempo
+    container_name: rag-tempo
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
@@ -95,7 +150,7 @@ services:
   # Diferente do OTel PUSH onde a app envia dados pro backend.
   prometheus:
     image: prom/prometheus:latest
-    container_name: ragops-prometheus
+    container_name: rag-prometheus
     restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -112,7 +167,7 @@ services:
   # Muito mais barato que Elasticsearch em armazenamento e CPU.
   loki:
     image: grafana/loki:latest
-    container_name: ragops-loki
+    container_name: rag-loki
     restart: unless-stopped
     command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
@@ -126,7 +181,7 @@ services:
   # Faz parsing do JSON de cada linha e extrai labels (level, logger, etc.)
   promtail:
     image: grafana/promtail:latest
-    container_name: ragops-promtail
+    container_name: rag-promtail
     restart: unless-stopped
     command: ["-config.file=/etc/promtail/config.yml"]
     volumes:
@@ -141,7 +196,7 @@ services:
   # Login padrão: admin / admin
   grafana:
     image: grafana/grafana:latest
-    container_name: ragops-grafana
+    container_name: rag-grafana
     restart: unless-stopped
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true          # permite acesso sem login (dev)
@@ -160,6 +215,7 @@ services:
 
 volumes:
   pgdata:
+  pgadmin_data:
   ollama_data:
   tempo_data:
   prometheus_data:

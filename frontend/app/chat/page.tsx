@@ -183,7 +183,9 @@ export default function ChatPage() {
                   <div className="flex flex-wrap gap-2">
                     {msg.sources.slice(0, 6).map((source, index) => (
                       <span key={`${source.source}-${source.page}-${index}`} className="rounded-full border border-gray-700 px-2 py-1 text-[10px]">
-                        {source.source}{source.page != null ? ` · p.${source.page}` : ""}
+                        {source.source}
+                        {source.page != null ? ` · p.${source.page}` : ""}
+                        {source.asset_name ? ` · img:${source.asset_name}` : ""}
                       </span>
                     ))}
                   </div>
@@ -194,6 +196,9 @@ export default function ChatPage() {
                   <p>
                     chunks usados: {msg.retrieval.chunks_used ?? 0} · candidatos: {msg.retrieval.candidate_chunks ?? 0} · coverage: {msg.retrieval.coverage_mode ? "on" : "off"}
                   </p>
+                  {msg.retrieval.image_chunks_used ? (
+                    <p>OCR de imagem usados: {msg.retrieval.image_chunks_used}</p>
+                  ) : null}
                 </div>
               )}
               {msg.time && <span className="text-[10px] text-gray-600 px-1">{msg.time}</span>}

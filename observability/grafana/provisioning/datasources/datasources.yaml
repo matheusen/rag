@@ -67,7 +67,7 @@ datasources:
     jsonData:
       # Correlação Logs → Traces: ao ver um log com traceID, abre no Tempo
       derivedFields:
-        - matcherRegex: '"trace_id":"(\w+)"'
+        - matcherRegex: 'trace_id=([a-fA-F0-9]+)'
           name: TraceID
           url: '$${__value.raw}'
           datasourceUid: tempo-uid

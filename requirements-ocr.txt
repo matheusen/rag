@@ -1,0 +1,9 @@
+# Dependencias opcionais para OCR multimodal local.
+# Instale apenas em ambientes que vao executar ingestao com imagens/PDFs escaneados.
+Pillow
+transformers
+accelerate
+torch
+safetensors
+sentencepiece
+chandra-ocr

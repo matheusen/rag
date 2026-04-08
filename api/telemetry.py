@@ -11,9 +11,9 @@ CONCEITOS OTEL:
 
 STACK COMPLETA:
   FastAPI app  → OTLP HTTP (4318) → OTel Collector → Jaeger  (traces, porta 16686)
-                                                   → Tempo   (traces, via Grafana 3000)
+                                                   → Tempo   (traces, via Grafana 3030)
   FastAPI app  → /metrics (HTTP)  ← Prometheus scrape         (metrics, porta 9090)
-  FastAPI app  → logs/api.log     ← Promtail → Loki           (logs, via Grafana 3000)
+  FastAPI app  → logs/api.log     ← Promtail → Loki           (logs, via Grafana 3030)
 
 Instrumentações automáticas:
   FastAPIInstrumentor   → span por requisição HTTP (method, route, status_code).
@@ -42,6 +42,20 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pythonjsonlogger import jsonlogger
 
 
+class TraceContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        span = trace.get_current_span()
+        span_context = span.get_span_context() if span is not None else None
+
+        if not hasattr(record, "trace_id"):
+            record.trace_id = f"{span_context.trace_id:032x}" if span_context and span_context.is_valid else ""
+        if not hasattr(record, "span_id"):
+            record.span_id = f"{span_context.span_id:016x}" if span_context and span_context.is_valid else ""
+        if not hasattr(record, "service"):
+            record.service = os.environ.get("OTEL_SERVICE_NAME", "rag-system")
+        return True
+
+
 def setup_logging() -> None:
     """
     Configura o logging raiz para emitir JSON estruturado.
@@ -59,9 +73,10 @@ def setup_logging() -> None:
 
     # Formato JSON: os campos extras passados via extra={} aparecem automaticamente
     formatter = jsonlogger.JsonFormatter(
-        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        "%(asctime)s %(name)s %(levelname)s %(message)s %(service)s %(trace_id)s %(span_id)s",
         timestamp=True,
     )
+    trace_filter = TraceContextFilter()
 
     # Handler 1: arquivo rotativo (10MB por arquivo, mantém 5 backups)
     handler_file = logging.handlers.RotatingFileHandler(
@@ -71,10 +86,12 @@ def setup_logging() -> None:
         encoding="utf-8",
     )
     handler_file.setFormatter(formatter)
+    handler_file.addFilter(trace_filter)
 
     # Handler 2: stdout (útil para Docker logs)
     handler_stdout = logging.StreamHandler()
     handler_stdout.setFormatter(formatter)
+    handler_stdout.addFilter(trace_filter)
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)

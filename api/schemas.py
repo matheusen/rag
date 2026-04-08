@@ -16,7 +16,8 @@ class QueryRequest(BaseModel):
 class QuerySource(BaseModel):
     source: str
     page: int | None = None
-    kind: str = Field(..., description="Origem do contexto: chunk ou summary")
+    kind: str = Field(..., description="Origem do contexto: chunk, summary ou image_ocr")
+    asset_name: str | None = Field(None, description="Nome da imagem quando a fonte veio de OCR")
     score: float | None = None
 
 
@@ -30,6 +31,9 @@ class QueryRetrievalMetadata(BaseModel):
     chunks_used: int | None = None
     dense_hits: int | None = None
     lexical_hits: int | None = None
+    asset_dense_hits: int | None = None
+    asset_lexical_hits: int | None = None
+    image_chunks_used: int | None = None
     selected_documents: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
@@ -51,6 +55,8 @@ class IngestResponse(BaseModel):
     chunks_written: int | None = None
     page_count: int | None = None
     summary_updated: bool | None = None
+    image_assets: int | None = None
+    ocr_chunks_written: int | None = None
 
 
 class SQLAlchemyArticleSummary(BaseModel):
@@ -76,3 +82,14 @@ class SQLAlchemyChunkDetail(BaseModel):
     document: str | None = None
     embedding: list[float] | None = None
     embedding_dimensions: int | None = None
+
+
+class SQLAlchemyImageAssetSummary(BaseModel):
+    asset_id: str
+    source: str
+    asset_name: str
+    asset_kind: str
+    page: int | None = None
+    ocr_engine: str | None = None
+    ocr_chunks: int
+    ocr_preview: str | None = None

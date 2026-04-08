@@ -20,16 +20,18 @@ URLs de acesso local e endpoints internos usados pela telemetria do projeto.
 
 | Endpoint | Protocolo | Quem recebe | Quem envia |
 |---|---|---|---|
-| `http://localhost:4318/v1/traces` | OTLP HTTP | OTel Collector | FastAPI app (`telemetry.py`) |
+| `http://localhost:4318/v1/traces` | OTLP HTTP | OTel Collector | FastAPI local fora do Docker (`telemetry.py`) |
 | `localhost:4317` | OTLP gRPC | OTel Collector | qualquer SDK gRPC |
-| `http://localhost:8000/metrics` | HTTP (Prometheus scrape) | Prometheus | FastAPI app (`prometheus-fastapi-instrumentator`) |
+| `http://localhost:8000/metrics` | HTTP (Prometheus scrape) | Prometheus | FastAPI exposta pelo container `rag-api` |
 
 ### Endpoints internos Docker (container → container)
 
 | Endpoint | Serviço destino | Quem usa |
 |---|---|---|
+| `api:8000` | FastAPI | Prometheus |
 | `jaeger:4317` | Jaeger OTLP gRPC | OTel Collector |
 | `tempo:4317` | Tempo OTLP gRPC | OTel Collector |
+| `otel-collector:8889/metrics` | Spanmetrics do Collector | Prometheus |
 | `loki:3100/loki/api/v1/push` | Loki Push API | Promtail |
 | `prometheus:9090` | Prometheus | Grafana (datasource) |
 | `tempo:3200` | Tempo HTTP Query | Grafana (datasource) |
@@ -45,8 +47,8 @@ URLs de acesso local e endpoints internos usados pela telemetria do projeto.
 | OTel Collector | `4317:4317` | gRPC (OTLP) |
 | OTel Collector | `4318:4318` | HTTP (OTLP) |
 | OTel Collector | `8888:8888` | HTTP (métricas internas do collector) |
+| OTel Collector | `8889:8889` | HTTP (spanmetrics para Prometheus) |
 | Jaeger | `16686:16686` | HTTP (UI) |
-| Jaeger | `14250:14250` | gRPC (legado) |
 | Grafana | `3030:3000` | HTTP (UI) — 3000 do host estava ocupado |
 | Prometheus | `9090:9090` | HTTP |
 | Loki | `3100:3100` | HTTP |
@@ -59,7 +61,7 @@ URLs de acesso local e endpoints internos usados pela telemetria do projeto.
 | Variável | Valor padrão | Onde é usada |
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | `telemetry.py` → `OTLPSpanExporter` |
-| `OTEL_SERVICE_NAME` | `rag-system` | `telemetry.py` → `Resource` |
+| `OTEL_SERVICE_NAME` | `rag-api` no compose, `rag-system` fora dele | `telemetry.py` → `Resource` |
 | `APP_ENV` | `development` | `telemetry.py` → `Resource` |
 
 ---
@@ -67,7 +69,7 @@ URLs de acesso local e endpoints internos usados pela telemetria do projeto.
 ## Fluxo completo de dados
 
 ```
-FastAPI (8000)
+FastAPI / rag-api (8000)
   │
   ├── OTLP HTTP ──────→ OTel Collector (4318)
   │                           ├──→ Jaeger (16686)   traces
@@ -79,6 +81,7 @@ FastAPI (8000)
 
 Grafana (3030)
   ├── datasource: Prometheus → http://prometheus:9090
+  ├── spanmetrics: Prometheus ← otel-collector:8889
   ├── datasource: Tempo      → http://tempo:3200       (correlação → Loki)
   └── datasource: Loki       → http://loki:3100        (correlação → Tempo)
 ```

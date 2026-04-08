@@ -19,6 +19,17 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318   # recebe OTLP HTTP da app (usado pela nossa config Python)
 
+connectors:
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]
+    dimensions:
+      - name: http.method
+      - name: http.route
+      - name: http.status_code
+      - name: service.name
+
 processors:
   batch:
     timeout: 1s                  # máximo 1s de espera antes de exportar
@@ -37,13 +48,24 @@ exporters:
     tls:
       insecure: true
 
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
   # ── Debug no stdout do collector (útil para troubleshooting) ─────────────
   debug:
     verbosity: basic
 
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers:  [otlp]
       processors: [batch]
-      exporters:  [otlp/jaeger, otlp/tempo, debug]
+      exporters:  [spanmetrics, otlp/jaeger, otlp/tempo, debug]
+    metrics:
+      receivers:  [spanmetrics]
+      exporters:  [prometheus]

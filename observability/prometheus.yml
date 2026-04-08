@@ -23,16 +23,15 @@ global:
   evaluation_interval: 15s    # avalia rules de alerta a cada 15s
 
 scrape_configs:
-  # ── FastAPI app (rodando no host) ─────────────────────────────────────────
-  # host.docker.internal = hostname especial do Docker Desktop que resolve para o host
+  # ── FastAPI app (rodando no mesmo Docker Compose) ─────────────────────────
   - job_name: rag-api
     metrics_path: /metrics
     static_configs:
       - targets:
-          - host.docker.internal:8000
+          - api:8000
         labels:
           service: rag-api
-          environment: development
+          environment: docker
 
   # ── OTel Collector métricas internas ─────────────────────────────────────
   - job_name: otel-collector
@@ -42,3 +41,12 @@ scrape_configs:
           - otel-collector:8888
         labels:
           service: otel-collector
+
+  # ── Spanmetrics geradas pelo Collector a partir dos traces ────────────────
+  - job_name: otel-spanmetrics
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - otel-collector:8889
+        labels:
+          service: otel-spanmetrics
