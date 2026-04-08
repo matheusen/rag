@@ -36,10 +36,10 @@ app = FastAPI(
     title="RAG System",
     description=(
         "API RAG com dois frameworks paralelos para comparação:\n\n"
-        "- **LangChain** (`/langchain/*`): usa `PGVector` + `create_retrieval_chain`\n"
-        "- **LlamaIndex** (`/llamaindex/*`): usa `PGVectorStore` + `RetrieverQueryEngine`\n"
+        "- **LangChain** (`/langchain/*`): pipeline principal com ingestão segura por documento, índice de resumos, retrieval híbrido e coverage mode\n"
+        "- **LlamaIndex** (`/llamaindex/*`): baseline vetorial para comparação e estudo\n"
         "- **SQLAlchemy** (`/sqlalchemy/*`): inspeciona artigos, chunks e embeddings salvos\n\n"
-        "Todos usam **PostgreSQL/pgvector**; LangChain e LlamaIndex usam **Google Gemini** para embeddings e LLM."
+        "Todos usam **PostgreSQL/pgvector**; o stack atual usa **Ollama local** para embeddings e geração."
     ),
     version="1.0.0",
 )

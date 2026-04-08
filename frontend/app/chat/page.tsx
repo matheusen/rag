@@ -1,16 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { ragQuery } from "@/lib/api";
+import { ragQuery, type QueryRetrievalMetadata, type QuerySource } from "@/lib/api";
 import { Send, Bot, User, Trash2, Zap } from "lucide-react";
 
 type Framework = "langchain" | "llamaindex";
+type QueryMode = "auto" | "coverage";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   framework?: Framework;
   time?: string;
+  sources?: QuerySource[];
+  retrieval?: QueryRetrievalMetadata | null;
 }
 
 const QUESTIONS = [
@@ -30,12 +33,13 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "Olá! Sou seu assistente de estudo RAG. Faça perguntas sobre os artigos ingeridos ou sobre conceitos de RAG, LangChain, LlamaIndex e pgvector.",
+      content: "Olá! O cenário principal agora é o LangChain com retrieval híbrido e coverage mode. O LlamaIndex continua disponível como baseline vetorial de comparação.",
     },
   ]);
   const [input, setInput]         = useState("");
   const [loading, setLoading]     = useState(false);
   const [framework, setFramework] = useState<Framework>("langchain");
+  const [mode, setMode]           = useState<QueryMode>("auto");
   const [k, setK]                 = useState(4);
   const bottomRef                 = useRef<HTMLDivElement>(null);
 
@@ -53,10 +57,22 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
-      const res = await ragQuery(q, framework, k);
+      const res = await ragQuery(
+        q,
+        framework,
+        k,
+        mode === "coverage" ? { coverage_mode: true } : undefined,
+      );
       setMessages(prev => [
         ...prev,
-        { role: "assistant", content: res.answer, framework, time: new Date().toLocaleTimeString() },
+        {
+          role: "assistant",
+          content: res.answer,
+          framework,
+          time: new Date().toLocaleTimeString(),
+          sources: res.sources,
+          retrieval: res.retrieval,
+        },
       ]);
     } catch (e: unknown) {
       setMessages(prev => [
@@ -74,7 +90,7 @@ export default function ChatPage() {
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Chat RAG</h1>
-          <p className="text-gray-400 text-sm">Converse com a base de conhecimento usando LangChain ou LlamaIndex</p>
+          <p className="text-gray-400 text-sm">LangChain = cenário escolhido com híbrido + coverage. LlamaIndex = baseline vetorial.</p>
         </div>
         <div className="flex items-center gap-3">
           {/* Framework toggle */}
@@ -87,9 +103,20 @@ export default function ChatPage() {
                   framework === fw ? "bg-indigo-600 text-white" : "text-gray-400 hover:text-white"
                 }`}
               >
-                {fw === "langchain" ? "LangChain" : "LlamaIndex"}
+                {fw === "langchain" ? "LangChain (principal)" : "LlamaIndex (baseline)"}
               </button>
             ))}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span>modo</span>
+            <select
+              value={mode}
+              onChange={e => setMode(e.target.value as QueryMode)}
+              className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-white text-xs"
+            >
+              <option value="auto">auto</option>
+              <option value="coverage">coverage</option>
+            </select>
           </div>
           {/* K selector */}
           <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -138,7 +165,10 @@ export default function ChatPage() {
             </div>
             <div className={`max-w-[80%] ${msg.role === "user" ? "items-end" : "items-start"} flex flex-col gap-1`}>
               {msg.framework && (
-                <span className="text-[10px] text-gray-500 px-1">via {msg.framework}</span>
+                <span className="text-[10px] text-gray-500 px-1">
+                  via {msg.framework}
+                  {msg.retrieval?.strategy ? ` • ${msg.retrieval.strategy}` : ""}
+                </span>
               )}
               <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                 msg.role === "user"
@@ -147,6 +177,25 @@ export default function ChatPage() {
               }`}>
                 <p className="whitespace-pre-wrap">{msg.content}</p>
               </div>
+              {msg.sources && msg.sources.length > 0 && (
+                <div className="w-full rounded-xl border border-gray-800 bg-gray-900/70 px-3 py-2 text-xs text-gray-400">
+                  <p className="mb-2 font-semibold uppercase tracking-wide text-gray-500">Fontes</p>
+                  <div className="flex flex-wrap gap-2">
+                    {msg.sources.slice(0, 6).map((source, index) => (
+                      <span key={`${source.source}-${source.page}-${index}`} className="rounded-full border border-gray-700 px-2 py-1 text-[10px]">
+                        {source.source}{source.page != null ? ` · p.${source.page}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {msg.retrieval && (
+                <div className="w-full rounded-xl border border-gray-800 bg-gray-900/70 px-3 py-2 text-[11px] text-gray-400">
+                  <p>
+                    chunks usados: {msg.retrieval.chunks_used ?? 0} · candidatos: {msg.retrieval.candidate_chunks ?? 0} · coverage: {msg.retrieval.coverage_mode ? "on" : "off"}
+                  </p>
+                </div>
+              )}
               {msg.time && <span className="text-[10px] text-gray-600 px-1">{msg.time}</span>}
             </div>
           </div>

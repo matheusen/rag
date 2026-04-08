@@ -129,6 +129,30 @@ O que morreu é a ilusão de que RAG é simples. Nunca foi.
 
 ---
 
+## Cenário Escolhido Para Este Projeto
+
+O cenário escolhido foi **Advanced RAG híbrido, hierárquico e coverage-aware com LangChain como orquestrador principal**.
+
+### Componentes da escolha
+- **Dense retrieval + busca lexical** com fusão por **RRF**.
+- **Resumo por documento + chunks detalhados** para combinar cobertura e profundidade.
+- **Coverage mode** para perguntas amplas, garantindo triagem no nível de documento antes da busca por chunk.
+- **Resposta com fontes obrigatórias** e metadados de retrieval expostos na API.
+- **Ingestão por documento com hash**, sem reset global da coleção.
+
+### Por que esta foi a melhor decisão
+- É o melhor ponto de equilíbrio entre **precisão**, **cobertura**, **redução de alucinação** e **custo** para a base atual.
+- Resolve o principal problema do RAG ingênuo: top-k puro pode deixar documento importante de fora.
+- Evita colocar GraphRAG ou Agentic RAG completo como padrão cedo demais, antes de o retrieval básico estar maduro.
+- Reaproveita a stack já montada com PostgreSQL, pgvector, Ollama e FastAPI sem introduzir infraestrutura paralela.
+
+### O que ficou como etapa posterior
+- **GraphRAG** para casos em que a relação entre entidades for mais importante que o conteúdo local do chunk.
+- **Agentic RAG completo** quando queries multi-hop e planejamento iterativo virarem a regra, não a exceção.
+- **REFRAG** quando o gargalo principal passar a ser latência de contexto e custo de inferência.
+
+---
+
 ## Uma Linha por Artigo
 
 | Artigo | Uma Linha |

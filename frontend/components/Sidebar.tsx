@@ -1,9 +1,10 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Database, MessageSquare, BookOpen } from "lucide-react";
+import { Database, MessageSquare, BookOpen, Lightbulb } from "lucide-react";
 
 const links = [
+  { href: "/apresentacao", label: "Apresentação",         icon: Lightbulb },
   { href: "/explorer", label: "SQLAlchemy Explorer", icon: Database },
   { href: "/chat",     label: "Chat RAG",            icon: MessageSquare },
   { href: "/guide",    label: "Guia RAG",             icon: BookOpen },

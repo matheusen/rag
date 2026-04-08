@@ -47,15 +47,11 @@ async def llamaindex_query(body: QueryRequest):
     """
     Recebe uma pergunta, busca os nodes mais relevantes no pgvector
     e gera uma resposta usando o query engine LlamaIndex:
-      pergunta → VectorIndexRetriever → ResponseSynthesizer(compact) → Gemini
+      pergunta → VectorIndexRetriever → ResponseSynthesizer(compact) → Ollama
     """
     try:
-        answer = query(body.question, k=body.k)
+        result = query(body.question, k=body.k)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return QueryResponse(
-        answer=answer,
-        framework="llamaindex",
-        question=body.question,
-    )
+    return QueryResponse(**result)

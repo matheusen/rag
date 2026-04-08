@@ -3,7 +3,7 @@ Router LangChain — endpoints de ingestão e consulta RAG.
 
 Rotas:
   POST /langchain/ingest  — faz upload de um arquivo e ingere no pgvector
-  POST /langchain/query   — faz uma pergunta ao RAG
+    POST /langchain/query   — faz uma pergunta ao pipeline híbrido coverage-aware
 """
 
 import shutil
@@ -22,8 +22,7 @@ router = APIRouter(prefix="/langchain", tags=["LangChain"])
 async def langchain_ingest(file: UploadFile = File(...)):
     """
     Recebe um arquivo (PDF ou texto), salva temporariamente e ingere
-    no pgvector usando a pipeline LangChain:
-      UploadFile → TextLoader/PyPDFLoader → RecursiveCharacterTextSplitter → PGVector
+        no pgvector usando ingestão segura por documento.
     """
     # Salva o arquivo em disco temporariamente para os loaders do LangChain lerem
     suffix = "." + file.filename.split(".")[-1]
@@ -32,31 +31,45 @@ async def langchain_ingest(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        ingest(tmp_path)
+        results = ingest(tmp_path, source_override=file.filename)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    first = results[0] if results else None
+
+    message = "Documento processado com sucesso"
+    if first and first.status == "skipped":
+        message = "Documento já estava indexado; ingestão pulada"
+
     return IngestResponse(
-        message="Documento ingerido com sucesso",
+        message=message,
         framework="langchain",
         filename=file.filename,
+        source=first.source if first else file.filename,
+        status=first.status if first else None,
+        chunks_written=first.chunks_written if first else None,
+        page_count=first.page_count if first else None,
+        summary_updated=first.summary_updated if first else None,
     )
 
 
 @router.post("/query", response_model=QueryResponse)
 async def langchain_query(body: QueryRequest):
     """
-    Recebe uma pergunta, busca os chunks mais relevantes no pgvector
-    e gera uma resposta usando a chain LangChain:
-      pergunta → VectorStoreRetriever → create_stuff_documents_chain → Gemini
+    Recebe uma pergunta, faz triagem opcional por documento,
+    combina retrieval denso + lexical com fusão RRF,
+    reranqueia os chunks e gera uma resposta com fontes.
     """
     try:
-        answer = query(body.question, k=body.k)
+        result = query(
+            body.question,
+            k=body.k,
+            coverage_mode=body.coverage_mode,
+            candidate_pool=body.candidate_pool,
+            lexical_pool=body.lexical_pool,
+            summary_k=body.summary_k,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    return QueryResponse(
-        answer=answer,
-        framework="langchain",
-        question=body.question,
-    )
+    return QueryResponse(**result)

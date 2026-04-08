@@ -2,8 +2,8 @@
 
 Projeto de RAG com dois fluxos paralelos para comparacao e aprendizado:
 
-- **LangChain** — pipeline com `PGVector` + `create_retrieval_chain`
-- **LlamaIndex** — pipeline com `PGVectorStore` + `RetrieverQueryEngine`
+- **LangChain** — pipeline principal com ingestão segura por documento, índice de resumos, retrieval híbrido e coverage mode
+- **LlamaIndex** — baseline vetorial com `PGVectorStore` + `RetrieverQueryEngine`
 
 Ambos usam:
 
@@ -21,6 +21,33 @@ Stack de observabilidade completa:
 
 ---
 
+## Cenário escolhido
+
+O cenário escolhido para este projeto foi **Advanced RAG híbrido, hierárquico e coverage-aware com LangChain como orquestrador principal**.
+
+O que entra nesse cenário:
+
+- **retrieval denso + busca lexical** com fusão por **RRF**
+- **resumo por documento + chunks detalhados** para cobrir perguntas amplas sem mandar tudo ao LLM
+- **coverage mode** para triagem por documento antes da busca detalhada
+- **resposta com fontes obrigatórias** e metadados de retrieval na API
+- **ingestão por documento com hash**, sem apagar a coleção inteira a cada novo arquivo
+
+Por que esta foi a escolha:
+
+- entrega mais precisão do que RAG ingênuo sem o custo e a complexidade de um Agentic RAG completo
+- reduz a chance de perder documentos relevantes porque todo documento pode ser triado pelo resumo
+- reduz alucinação com abstention explícita e fonte retornada junto com a resposta
+- preserva custo e latência melhores do que long context bruto ou loops agênticos em toda query
+
+O que não virou padrão inicial:
+
+- **Naive RAG**: simples demais para produção
+- **GraphRAG**: excelente para domínios relacionais, mas overkill para o corpus documental atual
+- **Agentic RAG completo**: melhor deixar para a próxima etapa, depois que o retrieval híbrido estiver bem medido
+
+---
+
 ## Estrutura do projeto
 
 ```
@@ -35,11 +62,12 @@ rag/
 │       └── sqlalchemy.py    — endpoints /sqlalchemy/*
 ├── rag/
 │   ├── langchain/
-│   │   ├── ingest.py        — ingestão PDF → chunks → PGVector
-│   │   └── query.py         — retrieval + ChatOllama (spans OTel)
+│   │   ├── advanced.py      — ingestão segura, summaries, retrieval híbrido e coverage mode
+│   │   ├── ingest.py        — wrapper CLI/API para ingestão por documento
+│   │   └── query.py         — consulta avançada com fontes e metadados
 │   └── llamaindex/
 │       ├── ingest.py        — ingestão PDF → nodes → PGVectorStore
-│       └── query.py         — RetrieverQueryEngine (spans OTel)
+│       └── query.py         — RetrieverQueryEngine baseline com fontes mínimas
 ├── frontend/                — Next.js 16 (App Router + Tailwind)
 │   └── app/
 │       ├── explorer/        — inspetor SQLAlchemy (artigos/chunks)
@@ -171,10 +199,10 @@ Coloque PDFs na pasta `artigos/` e execute:
 .\.venv\Scripts\python.exe -m rag.langchain.ingest artigos
 ```
 
-Retomar a partir de um chunk específico (útil se interrompeu):
+Reprocessar arquivos mesmo que o hash não tenha mudado:
 
 ```powershell
-.\.venv\Scripts\python.exe -m rag.langchain.ingest artigos 400
+.\.venv\Scripts\python.exe -m rag.langchain.ingest artigos --reset
 ```
 
 ### LlamaIndex
@@ -213,6 +241,8 @@ Endpoints disponíveis:
 .\.venv\Scripts\python.exe -m rag.langchain.query "O que e RAG e como funciona?"
 ```
 
+Para perguntas amplas, o endpoint do LangChain pode ativar triagem por documento (`coverage_mode`) antes da busca detalhada.
+
 ### LlamaIndex
 
 ```powershell
@@ -228,7 +258,7 @@ Endpoints disponíveis:
 Invoke-RestMethod -Method Post `
     -Uri "http://localhost:8000/langchain/query" `
     -ContentType "application/json" `
-    -Body '{"question":"O que e diffusion-based AI?","k":4}'
+    -Body '{"question":"Qual o melhor cenario de RAG para esta base?","k":4,"coverage_mode":true}'
 
 # LlamaIndex
 Invoke-RestMethod -Method Post `
@@ -458,6 +488,7 @@ Acessos após o boot:
 |---|---|---|
 | `langchain_pg_collection` | LangChain | namespaces de coleções |
 | `langchain_pg_embedding` | LangChain | chunks + embeddings + metadados |
+| `rag_document_registry` | LangChain | registro por documento com hash, resumo e embedding do resumo |
 | `llamaindex_documents` | LlamaIndex | nodes + embeddings |
 
 Cada artigo PDF gera múltiplos chunks. Um chunk = uma linha + um vetor de 768 dimensões.

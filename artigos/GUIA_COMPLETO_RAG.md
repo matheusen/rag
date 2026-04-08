@@ -22,6 +22,7 @@
 15. [Métricas de Avaliação](#15-métricas-de-avaliação)
 16. [Padrão Map-Reduce — Analisar Tudo com Baixo Custo](#16-padrão-map-reduce--analisar-tudo-com-baixo-custo)
 17. [O Futuro do RAG](#17-o-futuro-do-rag)
+18. [Cenário Escolhido Neste Projeto](#18-cenário-escolhido-neste-projeto)
 
 ---
 
@@ -1408,6 +1409,34 @@ Com contexto de 1M tokens, quando o modelo alucina ou comete um erro, você não
 **A direção que a pesquisa indica:** usar long context para *raciocínio* (MCTS, chain-of-thought interno) e RAG para *acesso a conhecimento externo*. REFRAG mostra que você pode ter os dois — contexto expandido *e* eficiência. O futuro não é escolher um dos dois. É usar cada um no que faz melhor.
 
 RAG não é um patch para contextos pequenos. É uma solução arquitetural para o problema fundamental de como LLMs devem acessar conhecimento externo de forma eficiente, verificável e escalável — e esse problema não desaparece com janelas de contexto maiores.
+
+---
+
+## 18. Cenário Escolhido Neste Projeto
+
+O cenário escolhido neste projeto foi **Advanced RAG híbrido, hierárquico e coverage-aware com LangChain como pipeline principal**.
+
+### O que isso significa na prática
+
+- **Retrieval denso + busca lexical** com fusão por **RRF**.
+- **Resumo por documento + chunks detalhados** para triagem ampla seguida de aprofundamento local.
+- **Coverage mode** para perguntas panorâmicas, comparativas ou com exigência de alta cobertura.
+- **Resposta com fontes obrigatórias** e metadados de retrieval retornados pela API.
+- **Ingestão por documento com hash**, evitando apagar a coleção inteira ao adicionar ou atualizar um arquivo.
+
+### Por que esta foi a melhor escolha para a base atual
+
+- Entrega um salto real sobre o **RAG ingênuo** em **precisão** e **cobertura**.
+- Reduz a chance de **perder um documento processado** porque a triagem começa no nível de documento, não apenas no top-k de chunks.
+- Reduz **alucinação** ao combinar abstention explícita, contexto recuperado e fonte retornada.
+- Mantém **custo e latência** muito menores do que long context bruto ou um pipeline agêntico completo em toda consulta.
+- Aproveita a stack já existente com **PostgreSQL + pgvector + Ollama + FastAPI** sem exigir uma infraestrutura paralela.
+
+### O que não virou padrão inicial
+
+- **GraphRAG**: melhor deixar para domínios em que a relação entre entidades seja o núcleo do problema.
+- **Agentic RAG completo**: deixar para depois que o retrieval híbrido estiver medido e estável.
+- **REFRAG**: entra quando latência de contexto e custo de inferência virarem o principal gargalo operacional.
 
 ---
 

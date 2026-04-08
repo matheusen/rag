@@ -1,0 +1,1 @@
+{"asctime": "2026-04-08 09:45:50,279", "name": "api.telemetry", "levelname": "INFO", "message": "Telemetria inicializada", "otlp_endpoint": "http://localhost:4318", "service": "rag-system", "timestamp": "2026-04-08T12:45:50.279929+00:00"}

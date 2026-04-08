@@ -74,7 +74,7 @@ def get_index() -> VectorStoreIndex:
     )
 
 
-def query(question: str, k: int = 4) -> str:
+def query(question: str, k: int = 4) -> dict:
     with tracer.start_as_current_span("llamaindex.rag.query") as span:
         span.set_attribute("rag.question", question)
         span.set_attribute("rag.k", k)
@@ -100,14 +100,52 @@ def query(question: str, k: int = 4) -> str:
             response = engine.query(question)
             engine_span.set_attribute("rag.source_nodes_count", len(response.source_nodes))
 
-        span.set_attribute("rag.answer_length", len(str(response.response)))
-        return str(response.response)
+        sources: list[dict] = []
+        for source_node in response.source_nodes:
+            node = getattr(source_node, "node", None)
+            metadata = dict(getattr(node, "metadata", {}) or {})
+            raw_page = metadata.get("page")
+            try:
+                page = int(raw_page) if raw_page not in (None, "") else None
+            except (TypeError, ValueError):
+                page = None
+
+            sources.append(
+                {
+                    "source": str(metadata.get("source", metadata.get("file_name", "documento"))),
+                    "page": page,
+                    "kind": "chunk",
+                    "score": float(source_node.score) if source_node.score is not None else None,
+                }
+            )
+
+        answer = str(response.response)
+        span.set_attribute("rag.answer_length", len(answer))
+        return {
+            "answer": answer,
+            "framework": "llamaindex",
+            "question": question,
+            "sources": sources,
+            "retrieval": {
+                "strategy": "baseline_vector_compact_llamaindex",
+                "coverage_mode": False,
+                "documents_total": None,
+                "documents_screened": None,
+                "documents_selected": None,
+                "candidate_chunks": len(response.source_nodes),
+                "chunks_used": len(response.source_nodes),
+                "dense_hits": len(response.source_nodes),
+                "lexical_hits": 0,
+                "selected_documents": [],
+                "notes": ["Baseline vetorial com synthesizer compact do LlamaIndex."],
+            },
+        }
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Uso: python -m rag.llamaindex.query \"sua pergunta\"")
         sys.exit(1)
-    answer = query(" ".join(sys.argv[1:]))
+    result = query(" ".join(sys.argv[1:]))
     print("\n--- Resposta (LlamaIndex) ---")
-    print(answer)
+    print(result["answer"])

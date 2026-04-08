@@ -327,6 +327,31 @@ Avaliação humana                   → decisões de arquitetura e roadmap
 
 ---
 
+## 13. Cenário Escolhido Neste Projeto
+
+### Escolha
+- **Advanced RAG híbrido, hierárquico e coverage-aware**, com **LangChain** como pipeline principal.
+
+### O que entrou na implementação
+- **Retrieval denso + busca lexical** com fusão por **RRF**.
+- **Resumo por documento + chunks detalhados** para perguntas amplas sem custo de long context.
+- **Coverage mode** para triagem por documento antes de buscar os trechos finos.
+- **Resposta com fontes obrigatórias** e metadados de retrieval na API.
+- **Ingestão por documento com hash**, sem apagar a coleção inteira a cada arquivo novo.
+
+### Por que esse foi o melhor cenário
+- **Maior precisão** que o RAG ingênuo sem depender de um agente completo em toda consulta.
+- **Menor risco de perder documento relevante**, porque toda a base pode ser triada primeiro no nível de resumo.
+- **Menos alucinação**, porque a resposta vem ancorada em contexto recuperado e retorna fonte.
+- **Custo e latência controlados**, bem abaixo de long context bruto ou loops agênticos permanentes.
+
+### O que ficou fora do padrão inicial
+- **Naive RAG:** simples demais para produção.
+- **GraphRAG:** reservado para domínios realmente relacionais.
+- **Agentic RAG completo:** próximo passo, depois que o retrieval híbrido estiver bem medido.
+
+---
+
 ## Resumo Final — Os 5 Pontos Que Ficam
 
 1. **RAG não é opcional para dados privados** — o LLM não foi treinado no seu sistema.

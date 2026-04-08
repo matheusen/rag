@@ -25,6 +25,36 @@ export interface QueryResponse {
   answer: string;
   framework: string;
   question: string;
+  sources?: QuerySource[];
+  retrieval?: QueryRetrievalMetadata | null;
+}
+
+export interface QuerySource {
+  source: string;
+  page: number | null;
+  kind: string;
+  score: number | null;
+}
+
+export interface QueryRetrievalMetadata {
+  strategy: string;
+  coverage_mode: boolean;
+  documents_total: number | null;
+  documents_screened: number | null;
+  documents_selected: number | null;
+  candidate_chunks: number | null;
+  chunks_used: number | null;
+  dense_hits: number | null;
+  lexical_hits: number | null;
+  selected_documents: string[];
+  notes: string[];
+}
+
+export interface QueryOptions {
+  coverage_mode?: boolean;
+  candidate_pool?: number;
+  lexical_pool?: number;
+  summary_k?: number;
 }
 
 export async function fetchArticles(contains?: string, limit = 100): Promise<Article[]> {
@@ -63,12 +93,13 @@ export async function fetchChunkDetail(id: string, dims = 30): Promise<ChunkDeta
 export async function ragQuery(
   question: string,
   framework: "langchain" | "llamaindex",
-  k = 4
+  k = 4,
+  options?: QueryOptions,
 ): Promise<QueryResponse> {
   const res = await fetch(`${BASE}/${framework}/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, k }),
+    body: JSON.stringify({ question, k, ...(options ?? {}) }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

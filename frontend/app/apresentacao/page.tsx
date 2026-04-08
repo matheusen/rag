@@ -1,513 +1,930 @@
-"use client";
-
-import { useState } from "react";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Source_Serif_4, Space_Grotesk } from "next/font/google";
+import type { LucideIcon } from "lucide-react";
 import {
-  ChevronDown, ChevronUp, AlertTriangle, Lightbulb,
-  Database, GitBranch, Zap, TrendingUp, CheckCircle,
-  XCircle, ArrowRight, BarChart3, Layers, Clock,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  BookOpen,
+  Bot,
+  CheckCircle,
+  Clock,
+  Database,
+  GitBranch,
+  Layers,
+  Lightbulb,
+  MessageSquare,
+  Search,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   SLIDES — cada objeto é um "slide" da apresentação
-   ───────────────────────────────────────────────────────────────────────────── */
+const displayFont = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-display",
+  weight: ["500", "700"],
+});
 
-const SLIDES = [
-  /* ── 1 ── */
-  {
-    id: 1,
-    color: "rose",
-    icon: AlertTriangle,
-    title: "O Problema",
-    subtitle: "Por que LLM sozinho não basta",
-    bullets: [
-      { icon: "⏳", text: "Conhecimento estático — o modelo foi treinado até uma data de corte. Tudo depois disso ele não sabe." },
-      { icon: "🌀", text: "Alucinação — sem fatos reais para ancorar a resposta, o modelo inventa com total confiança." },
-      { icon: "🔒", text: "Dados privados — o LLM nunca viu sua documentação interna, contratos, tickets ou manuais." },
-      { icon: "🔍", text: "Sem rastreabilidade — você não sabe de onde veio a informação. Em contextos jurídicos/médicos, isso é inaceitável." },
-    ],
-    highlight: {
-      label: "Exemplo concreto",
-      color: "rose",
-      content: `Pergunta: "Qual a versão atual da nossa API de pagamentos?"
+const bodyFont = Source_Serif_4({
+  subsets: ["latin"],
+  variable: "--font-body",
+  weight: ["400", "600", "700"],
+});
 
-GPT-4 sem RAG → responde com base no treino, pode estar desatualizado, sem fonte.
+export const metadata: Metadata = {
+  title: "Apresentação RAG",
+  description: "Deck visual para apresentar RAG, GraphRAG, retrieval híbrido e roadmap ao time.",
+};
 
-GPT-4 com RAG → busca no Confluence/PDF interno → cita o trecho exato → resposta correta e auditável.`,
-    },
+type Tone = "coral" | "teal" | "blue" | "gold";
+type PanelKey =
+  | "problem"
+  | "concept"
+  | "pipeline"
+  | "types"
+  | "techniques"
+  | "graph"
+  | "cost"
+  | "decision"
+  | "stack"
+  | "mapreduce"
+  | "evaluation"
+  | "roadmap";
+
+type Section = {
+  id: string;
+  number: string;
+  title: string;
+  subtitle: string;
+  summary: string;
+  bullets: string[];
+  calloutTitle: string;
+  calloutLines: string[];
+  icon: LucideIcon;
+  tone: Tone;
+  panel: PanelKey;
+};
+
+const toneStyles: Record<Tone, { badge: string; dot: string; border: string; soft: string; panel: string; accent: string }> = {
+  coral: {
+    badge: "bg-[#ffe3da] text-[#9a3818]",
+    dot: "bg-[#ef6b3f]",
+    border: "border-[#e7d2c3]",
+    soft: "bg-[#fff8f3]",
+    panel: "bg-[#fff4ec]",
+    accent: "text-[#a33b1a]",
   },
-  /* ── 2 ── */
+  teal: {
+    badge: "bg-[#dff5ef] text-[#0f655b]",
+    dot: "bg-[#2b9d8f]",
+    border: "border-[#cfe5dd]",
+    soft: "bg-[#f3fbf9]",
+    panel: "bg-[#ecfaf7]",
+    accent: "text-[#136b61]",
+  },
+  blue: {
+    badge: "bg-[#e2efff] text-[#244c86]",
+    dot: "bg-[#3f7ac4]",
+    border: "border-[#d5dfef]",
+    soft: "bg-[#f5f9ff]",
+    panel: "bg-[#eef5ff]",
+    accent: "text-[#28518c]",
+  },
+  gold: {
+    badge: "bg-[#faefcf] text-[#8e5b0a]",
+    dot: "bg-[#d39a2f]",
+    border: "border-[#eadfbd]",
+    soft: "bg-[#fffaf0]",
+    panel: "bg-[#fff4d8]",
+    accent: "text-[#8f6512]",
+  },
+};
+
+const heroStats = [
+  { value: "12", label: "blocos", detail: "do problema ao roadmap" },
+  { value: "1.750x", label: "mais barato", detail: "que long context de 1M tokens" },
+  { value: "5-50ms", label: "retrieval", detail: "com HNSW no pgvector" },
+];
+
+const flowHighlights = [
+  "1. Comece pela dor: dado privado, desatualização e falta de rastreabilidade.",
+  "2. Mostre o pipeline: retrieval primeiro, geração depois.",
+  "3. Feche com decisão prática: quando usar RAG, quando não usar.",
+  "4. Termine no roadmap: retrieval híbrido, rerank e agentic RAG.",
+];
+
+const sections: Section[] = [
   {
-    id: 2,
-    color: "indigo",
-    icon: Lightbulb,
+    id: "problema",
+    number: "01",
+    title: "O problema",
+    subtitle: "Por que LLM sozinho não basta",
+    summary:
+      "Sem retrieval, o modelo responde com o que memorizou no treino. Isso quebra exatamente nos cenários mais críticos do trabalho: dado novo, dado privado e resposta auditável.",
+    bullets: [
+      "Conhecimento do modelo é estático e sempre vem com data de corte.",
+      "Quando falta lastro factual, a resposta pode soar confiante e ainda assim estar errada.",
+      "Documentação interna, tickets, contratos e runbooks nunca estiveram no corpus de treino público.",
+      "Sem fonte citada, não existe trilha de auditoria para validar a resposta.",
+    ],
+    calloutTitle: "Exemplo que abre a conversa",
+    calloutLines: [
+      "Pergunta: qual é a versão atual da nossa API de pagamentos?",
+      "Sem RAG, a resposta pode sair plausível, mas sem garantia de atualidade nem prova de origem.",
+      "Com RAG, o sistema consulta a documentação interna primeiro, recupera o trecho certo e ancora a resposta na fonte.",
+    ],
+    icon: AlertTriangle,
+    tone: "coral",
+    panel: "problem",
+  },
+  {
+    id: "conceito",
+    number: "02",
     title: "O que é RAG",
     subtitle: "Retrieval-Augmented Generation",
+    summary:
+      "A lógica é simples e poderosa: antes de responder, o sistema busca os documentos relevantes e injeta esse material no prompt do LLM como contexto de trabalho.",
     bullets: [
-      { icon: "📖", text: "RAG = Retrieval-Augmented Generation — geração aumentada por recuperação de documentos." },
-      { icon: "🎯", text: "Antes de gerar a resposta, o sistema busca os documentos relevantes e os injeta no prompt do LLM como contexto." },
-      { icon: "🧠", text: "O LLM não precisa mais 'saber de cabeça' — ele lê os documentos em tempo real e responde com base neles." },
-      { icon: "📅", text: "Proposto pelo Facebook AI Research (Lewis et al., 2020). Hoje é o padrão de mercado para QA sobre documentos." },
-      { icon: "✅", text: "Resolve os 3 problemas ao mesmo tempo: atualiza conhecimento, ancora em fatos reais, suporta dados privados." },
+      "RAG não depende de o modelo saber tudo de cabeça; ele lê o contexto certo em tempo real.",
+      "A técnica reduz alucinação porque a resposta nasce de trechos recuperados, não apenas de memória paramétrica.",
+      "Dados privados passam a fazer parte da resposta sem exigir retreinamento do modelo.",
+      "Foi proposto em 2020 e hoje é o padrão para QA sobre bases documentais.",
     ],
-    highlight: {
-      label: "Analogia",
-      color: "indigo",
-      content: `Imagine um médico numa prova oral.
-
-Sem RAG → responde só do que memorizou (pode estar errado ou desatualizado).
-
-Com RAG → tem os prontuários e literatura médica na mesa — responde com base nos dados reais do paciente, citando a fonte.`,
-    },
+    calloutTitle: "Analogia rápida",
+    calloutLines: [
+      "Sem RAG, o especialista responde de memória e pode errar por desatualização.",
+      "Com RAG, ele entra na reunião com os prontuários e a literatura em cima da mesa.",
+      "O ganho não é só precisão; é também confiança operacional para responder com base em prova.",
+    ],
+    icon: Lightbulb,
+    tone: "teal",
+    panel: "concept",
   },
-  /* ── 3 ── */
   {
-    id: 3,
-    color: "teal",
+    id: "pipeline",
+    number: "03",
+    title: "Como funciona",
+    subtitle: "Indexação offline e consulta online",
+    summary:
+      "RAG opera em duas fases. A primeira organiza o conhecimento em chunks vetorizados. A segunda usa a pergunta do usuário para recuperar os melhores trechos e só então gerar a resposta.",
+    bullets: [
+      "Na indexação: documentos passam por loader, chunking, embedding e armazenamento no pgvector.",
+      "Chunk típico: cerca de 512 tokens, equilibrando precisão de retrieval e contexto suficiente para o LLM.",
+      "Na consulta: a pergunta vira embedding, a busca por similaridade retorna o top-k e o LLM responde sobre esse contexto.",
+      "A resposta pode trazer arquivo, página e score, o que melhora confiança e depuração.",
+    ],
+    calloutTitle: "Mensagem operacional",
+    calloutLines: [
+      "O banco vetorial não guarda apenas texto; ele guarda uma representação semântica do texto.",
+      "O LLM não recebe o documento inteiro. Ele recebe só os trechos com maior chance de responder a pergunta.",
+      "Isso explica por que RAG é mais barato e mais rápido do que despejar tudo na janela de contexto.",
+    ],
     icon: Layers,
-    title: "Como Funciona",
-    subtitle: "O pipeline completo em 2 fases",
-    bullets: [
-      { icon: "🗂️", text: "FASE 1 — Indexação (offline, uma vez): documentos → loader → chunks → embedding → banco vetorial (pgvector)." },
-      { icon: "🔢", text: "Chunk: pedaço de texto de ~512 tokens (≈380 palavras). Cada chunk vira um vetor numérico de 768 dimensões." },
-      { icon: "📐", text: "Embedding: representação matemática do significado. Frases similares ficam próximas no espaço vetorial." },
-      { icon: "⚡", text: "FASE 2 — Consulta (online, por query): embed da pergunta → busca cosine no pgvector (~5–50ms) → top-K chunks → LLM gera resposta." },
-      { icon: "📌", text: "O LLM recebe apenas os trechos relevantes, não o documento inteiro. Cada resposta pode citar a fonte (arquivo, página)." },
-    ],
-    highlight: {
-      label: "Pipeline visual",
-      color: "teal",
-      content: `INDEXAÇÃO (offline):
-PDFs → Loader → Chunks → Embedding Model → Vetores → pgvector
-
-CONSULTA (online, <1s total):
-Pergunta → Embed → pgvector cosine search → Top-5 chunks
-→ Prompt = "Com base nos documentos: {chunks} — {pergunta}"
-→ LLM → Resposta com fonte citada`,
-    },
+    tone: "blue",
+    panel: "pipeline",
   },
-  /* ── 4 ── */
   {
-    id: 4,
-    color: "emerald",
-    icon: GitBranch,
+    id: "tipos",
+    number: "04",
     title: "Tipos de RAG",
     subtitle: "Do básico ao estado da arte",
+    summary:
+      "RAG não é um único desenho arquitetural. O mercado já separa pipelines básicos, retrievers enriquecidos e agentes que decidem quando e como buscar.",
     bullets: [
-      { icon: "1️⃣", text: "Naive RAG — fluxo linear: indexa → busca → gera. Simples, bom para protótipos, mas sem verificação de qualidade." },
-      { icon: "2️⃣", text: "Advanced RAG — adiciona etapas: HyDE (gera doc hipotético para buscar), Query Expansion, Hybrid Search + RRF, Reranking." },
-      { icon: "3️⃣", text: "Modular RAG — componentes independentes e trocáveis: retriever, memory, fusion, routing, generator." },
-      { icon: "4️⃣", text: "Agentic RAG — o LLM age como agente com ferramentas de busca. Decide quando buscar, o que buscar, quantas rodadas." },
+      "Naive RAG resolve protótipo rápido: indexa, busca e gera.",
+      "Advanced RAG melhora o retrieval com HyDE, query expansion, hybrid search e reranking.",
+      "Modular RAG separa os blocos para trocar retriever, memória, roteamento e geração com mais liberdade.",
+      "Agentic RAG trata busca como ferramenta, não como etapa fixa, o que ajuda em perguntas multi-hop.",
     ],
-    highlight: {
-      label: "Tabela — técnicas do Advanced RAG",
-      color: "emerald",
-      content: `QUANDO       │ TÉCNICA          │ O QUE FAZ
-─────────────┼──────────────────┼──────────────────────────────────────────
-Antes busca  │ HyDE             │ LLM gera doc hipotético → embed dele (mais preciso)
-Antes busca  │ Query Expansion  │ Gera variações da pergunta, busca todas, combina
-Na busca     │ Hybrid Search    │ Vetorial (semântica) + BM25 (palavras exatas) + RRF
-Após busca   │ Reranking        │ Cross-encoder reordena top-50 → entrega top-5 ao LLM`,
-    },
-  },
-  /* ── 5 ── */
-  {
-    id: 5,
-    color: "fuchsia",
-    icon: Zap,
-    title: "Técnicas Mais Importantes (2024–2025)",
-    subtitle: "O que os papers científicos demonstraram",
-    bullets: [
-      { icon: "🔀", text: "Busca Híbrida + RRF — combina vetorial (semântica) + BM25 (termos exatos). IBM: supera qualquer índice isolado e até fine-tuning de domínio específico." },
-      { icon: "🎯", text: "FAIR-RAG — gap analysis iterativo: após cada busca, identifica o que falta e busca especificamente isso. +8 pts em HotpotQA." },
-      { icon: "🌳", text: "RAG-Star — Monte Carlo Tree Search explora múltiplos caminhos de raciocínio, RAG verifica cada passo. +19% em raciocínio complexo." },
-      { icon: "⚡", text: "REFRAG (Meta, 2025) — comprime chunks em embeddings antes do decoder. Atenção block-diagonal = 30× aceleração, zero perda de accuracy." },
-      { icon: "🏋️", text: "RAG-Gym — treina agente com DPO, supervisão nos passos intermediários (não só na resposta). +24% em generalização out-of-distribution." },
-      { icon: "🤝", text: "Collab-RAG — SLM local (3B params) decide quando/o que buscar; LLM grande (GPT-4) gera a resposta. Qualidade alta a custo baixo." },
+    calloutTitle: "Regra prática",
+    calloutLines: [
+      "Para base simples, Naive RAG entrega valor rápido.",
+      "Quando o custo do erro sobe, o retrieval deixa de ser detalhe e vira a principal alavanca de qualidade.",
+      "É por isso que o salto de protótipo para produção quase sempre passa por hybrid search e reranking.",
     ],
-    highlight: {
-      label: "Números que importam",
-      color: "fuchsia",
-      content: `REFRAG   (Meta, 2025)  → 30× aceleração de inferência, 0% perda de accuracy
-RAG-Gym  (UVA/NIH)    → +24% generalização com supervisão de processo
-RAG-Star (Renmin)     → +19% em raciocínio complexo com MCTS
-FAIR-RAG (Sharif)     → +8 pts HotpotQA, estado da arte multi-hop
-IBM Blended RAG       → busca híbrida supera fine-tuning específico de domínio`,
-    },
-  },
-  /* ── 6 ── */
-  {
-    id: 6,
-    color: "green",
     icon: GitBranch,
-    title: "GraphRAG — Quando as Relações Importam",
-    subtitle: "Além da similaridade semântica",
-    bullets: [
-      { icon: "🔗", text: "Busca vetorial responde: 'qual o conteúdo deste chunk?'. GraphRAG responde: 'qual a RELAÇÃO entre A e B?'." },
-      { icon: "🧩", text: "Knowledge Graph: triplas (sujeito → predicado → objeto). Excelente para raciocínio simbólico e cadeia causal." },
-      { icon: "🕸️", text: "Hypergraph: uma aresta conecta N nós (não apenas 2). Representa relações N-árias que KG padrão não expressa." },
-      { icon: "🌲", text: "Hierarchical (RAPTOR): árvore de resumos — pergunta abstrata consulta o topo, pergunta específica consulta a folha." },
-      { icon: "🏢", text: "Microsoft GraphRAG (open-source): extrai entidades → detecta comunidades (Leiden) → gera resumos por comunidade → responde queries globais." },
-    ],
-    highlight: {
-      label: "Quando usar cada um",
-      color: "green",
-      content: `VETORIAL (padrão)          │ GRAPHRAG
-───────────────────────────┼──────────────────────────────────────────
-Busca por similaridade     │ Busca por relações explícitas
-FAQs, docs simples, rápido │ Domínios relacionais (médico, jurídico, financeiro)
-Custo baixo de indexação   │ Indexação custosa (~$10–50/corpus)
-Perguntas locais/pontuais  │ Perguntas multi-hop e análise de "quem conecta com quem"
-
-→ Exemplo perfeito para GraphRAG:
-"Quais as relações entre os times de backend e as falhas no módulo de pagamentos?"`,
-    },
+    tone: "teal",
+    panel: "types",
   },
-  /* ── 7 ── */
   {
-    id: 7,
-    color: "amber",
+    id: "tecnicas",
+    number: "05",
+    title: "Técnicas mais importantes",
+    subtitle: "O que os papers de 2024–2025 estão mostrando",
+    summary:
+      "O avanço recente do RAG não está só em modelos maiores. Está na forma como a busca é melhorada, verificada e comprimida antes de chegar ao decoder.",
+    bullets: [
+      "Busca híbrida com RRF combina semântica e correspondência lexical, elevando recall e precisão.",
+      "Reranking com cross-encoder recupera rápido e decide devagar, o que costuma melhorar muito o top final entregue ao LLM.",
+      "FAIR-RAG faz gap analysis iterativo para descobrir explicitamente o que ainda falta responder.",
+      "REFRAG, RAG-Gym e RAG-Star apontam para sistemas mais rápidos, mais deliberativos e melhores em multi-hop.",
+    ],
+    calloutTitle: "Números que sustentam a tese",
+    calloutLines: [
+      "REFRAG: 30x de aceleração sem perda de accuracy reportada.",
+      "RAG-Gym: cerca de 24% de ganho em generalização fora de distribuição.",
+      "FAIR-RAG: melhora relevante em benchmarks de perguntas multi-hop justamente porque sabe identificar lacunas.",
+    ],
+    icon: Zap,
+    tone: "coral",
+    panel: "techniques",
+  },
+  {
+    id: "graphrag",
+    number: "06",
+    title: "GraphRAG",
+    subtitle: "Quando a relação entre entidades importa mais que o chunk isolado",
+    summary:
+      "Busca vetorial responde muito bem a perguntas locais. GraphRAG entra quando a resposta depende de relações explícitas entre pessoas, times, serviços, incidentes ou conceitos.",
+    bullets: [
+      "Knowledge graph modela sujeito, predicado e objeto para suportar raciocínio simbólico e causal.",
+      "Property graph enriquece nós e arestas com atributos e metadados úteis para consulta.",
+      "RAPTOR usa hierarquia de resumos para atender perguntas abstratas e perguntas específicas com o mesmo corpus.",
+      "Microsoft GraphRAG popularizou a combinação de extração de entidades, detecção de comunidades e resumos por cluster.",
+    ],
+    calloutTitle: "Exemplo de pergunta certa",
+    calloutLines: [
+      "Quais relações existem entre os times de backend e as falhas do módulo de pagamentos nos últimos 90 dias?",
+      "A busca vetorial encontra trechos relevantes; o grafo encontra conexões, causalidade e cadeia de impacto.",
+      "Se o seu problema é relacional, o vetor sozinho não conta a história inteira.",
+    ],
+    icon: GitBranch,
+    tone: "blue",
+    panel: "graph",
+  },
+  {
+    id: "long-context",
+    number: "07",
+    title: "Long context vs. RAG",
+    subtitle: "A comparação que sempre aparece na reunião",
+    summary:
+      "Janela enorme de contexto não elimina a necessidade de retrieval. Ela muda o ponto de equilíbrio, mas custo, latência, privacidade e escala continuam favorecendo RAG na maioria dos cenários corporativos.",
+    bullets: [
+      "RAG reduz drasticamente o volume de tokens enviados a cada pergunta.",
+      "Atenção continua tendo custo quadrático, então 1M de tokens cobra em dinheiro e em tempo para primeiro token.",
+      "Long context piora o problema de lost in the middle quando tudo compete pela atenção do modelo.",
+      "Para bases vivas e grandes, retrieval seletivo ainda é o caminho economicamente defensável.",
+    ],
+    calloutTitle: "Conclusão que fecha a objeção",
+    calloutLines: [
+      "Long context é ótimo para raciocínio global e protótipos pequenos.",
+      "RAG é a resposta para conhecimento externo, rotativo, privado e com exigência de fonte.",
+      "Na prática, os dois convivem; mas long context não substitui retrieval bem feito.",
+    ],
     icon: BarChart3,
-    title: "Long Context vs. RAG",
-    subtitle: "A questão do Gemini 1M tokens — respondida com números",
-    bullets: [
-      { icon: "❓", text: "'Se o Gemini tem 1M tokens de contexto, por que construir RAG?' — a pergunta que todo mundo faz." },
-      { icon: "💰", text: "CUSTO: 1.000 queries/dia com RAG (top-5 chunks) = ~$2/dia. Com long context (1M tokens) = ~$3.500/dia. Diferença: 1.750×." },
-      { icon: "⏱️", text: "LATÊNCIA: atenção é O(n²). TTFT com 1M tokens = 30–60 segundos. RAG: < 1 segundo end-to-end." },
-      { icon: "🎯", text: "LOST IN THE MIDDLE: modelos prestam mais atenção às bordas do contexto mesmo com janela grande." },
-      { icon: "📏", text: "ESCALA: empresa média tem milhões de documentos. 1M tokens ≈ 2.500 páginas — não cabe nada real." },
-      { icon: "🔐", text: "PRIVACIDADE: long context = enviar TODA a base para uma API a cada chamada. RAG = 3–10 chunks por query." },
-    ],
-    highlight: {
-      label: "Tabela de custo",
-      color: "amber",
-      content: `ABORDAGEM                    │ CUSTO/DIA (1k queries) │ CUSTO/MÊS
-─────────────────────────────┼────────────────────────┼──────────────
-RAG — top-5 chunks (~5k tok) │ ~$2                    │ ~$60
-Long context — 1M tokens     │ ~$3.500                │ ~$105.000
-Diferença                    │ 1.750×                 │
-
-→ Conclusão: long context para raciocínio INTERNO (ex: resumir tudo).
-             RAG para acesso a conhecimento EXTERNO (ex: responder sobre docs).`,
-    },
+    tone: "gold",
+    panel: "cost",
   },
-  /* ── 8 ── */
   {
-    id: 8,
-    color: "sky",
+    id: "decisao",
+    number: "08",
+    title: "Guia de decisão",
+    subtitle: "Quando usar RAG, prompt engineering ou fine-tuning",
+    summary:
+      "A decisão não precisa ser ideológica. Ela pode seguir um fluxo simples: natureza do dado, frequência de atualização, necessidade de explicabilidade e tamanho do acervo.",
+    bullets: [
+      "Use RAG quando o dado é privado, muda com frequência ou precisa ser citado na resposta.",
+      "Use prompt engineering quando o problema ainda está sendo validado e o modelo já sabe o suficiente.",
+      "Use fine-tuning para alterar comportamento, estilo ou estrutura de saída de forma persistente.",
+      "A combinação comum em produção é prompt bom + retrieval bom + fine-tuning só quando necessário.",
+    ],
+    calloutTitle: "Regra de bolso",
+    calloutLines: [
+      "Comece com prompt engineering para provar valor rapidamente.",
+      "Adicione RAG assim que a resposta depender de contexto externo ou confidencial.",
+      "Só então avalie fine-tuning, quando o gargalo for comportamento do modelo e não acesso à informação.",
+    ],
     icon: CheckCircle,
-    title: "Guia de Decisão",
-    subtitle: "Quando usar RAG vs. fine-tuning vs. prompt engineering",
-    bullets: [
-      { icon: "✅", text: "Use RAG quando: dados privados, informação muda frequentemente, precisa citar fontes, base > 50 docs." },
-      { icon: "❌", text: "NÃO use RAG quando: LLM já sabe a resposta com certeza, tarefa criativa sem base factual, < 20 docs curtos." },
-      { icon: "🎛️", text: "Prompt Engineering: mais rápido e barato — use para validar o conceito primeiro." },
-      { icon: "🔧", text: "Fine-tuning: quando precisar mudar o estilo/comportamento do modelo permanentemente. Alto custo, sem atualização dinâmica." },
-      { icon: "🔀", text: "Combinação ideal para produção: RAG (dados certos) + Fine-tuning (comportamento) + Prompts (instruções)." },
-    ],
-    highlight: {
-      label: "Comparativo",
-      color: "sky",
-      content: `CRITÉRIO              │ Prompt Eng. │ RAG  │ Fine-tuning
-──────────────────────┼─────────────┼──────┼────────────
-Conhecimento atual    │ ✗           │ ✓    │ ✗ (congelado)
-Custo de setup        │ Baixo       │ Médio│ Alto
-Citação de fontes     │ ✗           │ ✓    │ ✗
-Privacidade de dados  │ Média       │ Alta │ Média
-Velocidade de update  │ Imediata    │ Imediata│ Dias/semanas
-
-Progressão prática: Prompt Engineering → + RAG → + Fine-tuning`,
-    },
+    tone: "teal",
+    panel: "decision",
   },
-  /* ── 9 ── */
   {
-    id: 9,
-    color: "blue",
+    id: "stack",
+    number: "09",
+    title: "Nossa stack técnica",
+    subtitle: "O que este projeto já demonstra",
+    summary:
+      "A base atual já tem os componentes certos para uma conversa séria sobre RAG: banco vetorial, frameworks de pipeline, embeddings locais, LLM local e observabilidade fim a fim.",
+    bullets: [
+      "pgvector permite manter SQL, metadados e vetores no mesmo PostgreSQL.",
+      "LangChain e LlamaIndex cobrem duas formas de orquestrar retrieval e geração.",
+      "Ollama com nomic-embed-text e llama3.2 reduz custo operacional e evita enviar dado sensível para terceiros.",
+      "OpenTelemetry, Prometheus, Loki, Tempo e Grafana dão rastreabilidade para latência, erro e qualidade operacional.",
+    ],
+    calloutTitle: "Como traduzir isso para o time",
+    calloutLines: [
+      "Não estamos mostrando só teoria; o projeto já encadeia ingestão, retrieval, geração e observabilidade.",
+      "Isso permite discutir qualidade com base em implementação real, não em diagrama abstrato.",
+      "A stack atual já suporta o próximo passo natural: retrieval híbrido e reranking.",
+    ],
     icon: Database,
-    title: "Nossa Stack Técnica",
-    subtitle: "O que estamos usando hoje",
-    bullets: [
-      { icon: "🐘", text: "pgvector — extensão nativa do PostgreSQL. Tipo vector(768), índice HNSW (busca em O(log n)). Sem banco separado." },
-      { icon: "🦜", text: "LangChain — orquestração do pipeline: Loader → Splitter → Embedder → PGVector → Chain → LLM." },
-      { icon: "🦙", text: "LlamaIndex — alternativa para indexação rica com DocumentStore e StorageContext estruturado." },
-      { icon: "🤖", text: "Ollama (local) — nomic-embed-text (768 dims) + llama3.2. Zero custo de API, zero envio de dados externos." },
-      { icon: "📡", text: "OpenTelemetry — traces (Jaeger + Tempo), métricas (Prometheus + Grafana), logs (Loki + Promtail). Cada query rastreada." },
-    ],
-    highlight: {
-      label: "Fluxo completo neste projeto",
-      color: "blue",
-      content: `pergunta
-  → OllamaEmbeddings.embed_query()
-  → PGVector.similarity_search_with_score() (cosine, k=4, índice HNSW)
-  → create_stuff_documents_chain (injeta chunks no prompt)
-  → ChatOllama (llama3.2)
-  → resposta com source_documents
-
-Observabilidade:
-  FastAPI → OTLP → OTel Collector → Jaeger + Tempo (traces)
-                                  → Prometheus (métricas)
-  logs/api.log → Promtail → Loki
-  Grafana: correlação Traces ↔ Métricas ↔ Logs`,
-    },
+    tone: "blue",
+    panel: "stack",
   },
-  /* ── 10 ── */
   {
-    id: 10,
-    color: "violet",
+    id: "map-reduce",
+    number: "10",
+    title: "Padrão map-reduce",
+    subtitle: "Como cobrir muitos documentos sem pagar o preço do long context",
+    summary:
+      "Quando a pergunta exige cobertura ampla, o retrieval puro por similaridade pode deixar passar documentos relevantes. A saída prática é adicionar um primeiro nível de leitura barata via resumos.",
+    bullets: [
+      "Na indexação, cada documento ganha um resumo curto além dos chunks detalhados.",
+      "Na consulta ampla, o sistema lê os resumos de todos, seleciona os candidatos e aprofunda só nos escolhidos.",
+      "Essa arquitetura eleva cobertura sem jogar o custo na escala do long context bruto.",
+      "O padrão combina muito bem com checagem de cobertura inspirada em FAIR-RAG.",
+    ],
+    calloutTitle: "Headline desta parte",
+    calloutLines: [
+      "A ideia é simples: leitura panorâmica barata primeiro, leitura profunda depois.",
+      "Você troca uma busca cega por uma busca hierárquica.",
+      "Isso aproxima cobertura de 100% sem transformar cada query em uma conta absurda de tokens.",
+    ],
     icon: Layers,
-    title: "Padrão Map-Reduce",
-    subtitle: "Analisar TODOS os documentos sem custo de long context",
-    bullets: [
-      { icon: "⚡", text: "RAG padrão: seleciona por similaridade → pode ignorar docs pouco similares mas relevantes." },
-      { icon: "💸", text: "Long context para tudo: 1.750× mais caro. Inviável em produção." },
-      { icon: "🗂️", text: "Fase de indexação: modelo barato gera 1 resumo por documento. Banco armazena: resumo (nível 1) + chunks detalhados (nível 2)." },
-      { icon: "🔍", text: "Query específica → RAG padrão nos chunks. Análise completa → lê resumos de TODOS → detalha só os marcados como críticos." },
-      { icon: "✅", text: "Verificação de cobertura (inspirado no FAIR-RAG): verifica quais fontes foram citadas, busca as não citadas antes de finalizar." },
-    ],
-    highlight: {
-      label: "Comparativo de custo — 10 documentos",
-      color: "violet",
-      content: `ABORDAGEM               │ TOKENS/QUERY │ CUSTO APROX. │ COBERTURA
-────────────────────────┼──────────────┼──────────────┼──────────
-Long context (tudo)     │ ~500k        │ ~$1,75       │ 100%
-RAG padrão (top-5)      │ ~5k          │ ~$0,002      │ 60–80%
-Map-Reduce hierárquico  │ ~30k         │ ~$0,05       │ ~95%
-
-→ 95% de cobertura por apenas 3% do custo do long context.`,
-    },
+    tone: "gold",
+    panel: "mapreduce",
   },
-  /* ── 11 ── */
   {
-    id: 11,
-    color: "pink",
-    icon: BarChart3,
-    title: "Avaliação — Como Saber se o RAG Funciona",
-    subtitle: "Métricas objetivas para cada etapa do pipeline",
+    id: "avaliacao",
+    number: "11",
+    title: "Avaliação",
+    subtitle: "Como medir se o sistema realmente está funcionando",
+    summary:
+      "Sem avaliação, RAG vira demo. O retriever precisa ser medido separadamente da resposta final, e a geração precisa ser avaliada pela fidelidade ao contexto recuperado.",
     bullets: [
-      { icon: "📊", text: "Recall@K — dos documentos relevantes existentes, quantos o retriever trouxe no top-K? (foco no retriever)" },
-      { icon: "🎯", text: "Precision@K — dos K documentos trazidos, quantos são realmente relevantes? (evita ruído)" },
-      { icon: "📐", text: "Faithfulness (RAGAS) — a resposta é fiel aos documentos recuperados? Detecta alucinações em relação ao contexto." },
-      { icon: "💬", text: "Answer Relevancy (RAGAS) — a resposta endereça a pergunta ou desvia do tema?" },
-      { icon: "🤖", text: "LLM-as-a-judge — usa GPT-4 para avaliar. 95% de concordância com avaliação humana. Escalável e barato." },
+      "Recall@K e Precision@K avaliam a qualidade da busca antes de culpar o LLM pela resposta ruim.",
+      "Faithfulness mede se a resposta está suportada pelos documentos de contexto.",
+      "Answer relevancy e context relevancy ajudam a entender desvio de tema e ruído no retrieval.",
+      "Produção madura combina métrica automática, judge model e avaliação humana periódica.",
     ],
-    highlight: {
-      label: "Pirâmide de avaliação em produção",
-      color: "pink",
-      content: `         ┌───────────────────────────┐
-         │     Avaliação humana      │  ← mais confiável, mais caro
-         └─────────────┬─────────────┘
-                       ↓
-         ┌─────────────────────────────────┐
-         │  LLM-as-a-judge (RAGAS, GPT-4)  │  ← escalável, custo médio
-         └─────────────┬───────────────────┘
-                       ↓
-         ┌──────────────────────────────────────────┐
-         │  Métricas automáticas (Recall, F1, ROUGE) │  ← barato, tempo real
-         └──────────────────────────────────────────┘
-
-→ Automáticas: monitoramento contínuo
-→ LLM-judge:   avaliação semanal/mensal
-→ Humana:      decisões de arquitetura`,
-    },
-  },
-  /* ── 12 ── */
-  {
-    id: 12,
-    color: "slate",
+    calloutTitle: "Frase importante para a reunião",
+    calloutLines: [
+      "Se o retrieval está errado, o restante do pipeline só propaga o erro com mais fluência.",
+      "Por isso, garbage in, garbage out é literalmente uma regra de arquitetura em RAG.",
+      "Medir o retriever não é opcional; é a base para qualquer discussão séria de qualidade.",
+    ],
     icon: TrendingUp,
-    title: "Roadmap e Próximos Passos",
-    subtitle: "Do atual para o estado da arte",
+    tone: "coral",
+    panel: "evaluation",
+  },
+  {
+    id: "roadmap",
+    number: "12",
+    title: "Roadmap",
+    subtitle: "Curto, médio e longo prazo",
+    summary:
+      "O próximo ganho relevante não vem de reescrever tudo. Vem de melhorar retrieval, enriquecer ranking e automatizar avaliação antes de entrar em camadas mais sofisticadas.",
     bullets: [
-      { icon: "🟢", text: "CURTO PRAZO — busca híbrida como padrão (vetorial + BM25 + RRF), reranking com BGE Reranker, filtros por metadados." },
-      { icon: "🟡", text: "MÉDIO PRAZO — Agentic RAG com multi-hop, GraphRAG para domínios relacionais, pipeline de avaliação RAGAS automatizado." },
-      { icon: "🔵", text: "LONGO PRAZO — REFRAG para compressão de contexto (30×), OCR com Chandra 2 / MonkeyOCR para documentos escaneados." },
-      { icon: "🧪", text: "DSPy (Stanford) — programação declarativa de pipelines LLM. Define a tarefa (Signature), o framework otimiza os prompts automaticamente." },
-      { icon: "🌐", text: "RAG Multimodal — indexar imagens, screenshots e diagramas. AR-RAG (Meta/VT): primeiro RAG no nível de patch para geração de imagens." },
+      "Curto prazo: hybrid search como padrão, reranking e filtros por metadados.",
+      "Médio prazo: agentic RAG, multi-hop e GraphRAG onde o domínio realmente for relacional.",
+      "Longo prazo: multimodalidade, OCR estruturado e compressão de contexto ao estilo REFRAG.",
+      "A ordem importa: primeiro acertar qualidade e observabilidade, depois sofisticar a arquitetura.",
     ],
-    highlight: {
-      label: "Resumo — os 5 pontos que ficam",
-      color: "slate",
-      content: `1. RAG não é opcional para dados privados — o LLM não foi treinado no seu sistema.
-2. Qualidade do retrieval determina a qualidade da resposta — garbage in, garbage out.
-3. Busca híbrida (vetorial + BM25) deve ser o padrão, não a exceção.
-4. Long context não substitui RAG — 1.750× mais caro com latência, privacidade e escala ruins.
-5. Agentic RAG é o futuro — pipelines que aprendem a buscar superam estáticos em +24%.
-
-Baseado em análise de 43 artigos científicos (2023–2025).`,
-    },
+    calloutTitle: "Mensagem de fechamento",
+    calloutLines: [
+      "RAG já resolve um problema concreto hoje.",
+      "Agentic RAG e GraphRAG são extensões naturais quando o caso de uso exige mais profundidade.",
+      "O roadmap é uma progressão de maturidade, não uma troca brusca de stack.",
+    ],
+    icon: Clock,
+    tone: "teal",
+    panel: "roadmap",
   },
 ];
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   ESTILOS
-   ───────────────────────────────────────────────────────────────────────────── */
+const takeaways = [
+  "RAG não é opcional quando a resposta depende de dado privado ou atualizado.",
+  "Qualidade do retrieval determina a qualidade da resposta final.",
+  "Hybrid search deve ser o padrão inicial em produção, não a exceção.",
+  "Long context ajuda, mas não resolve custo, escala e explicabilidade sozinho.",
+  "A evolução natural é retrieval melhor, avaliação melhor e só depois arquitetura mais autônoma.",
+];
 
-const colorMap: Record<string, { border: string; badge: string; icon: string; highlight: string; label: string }> = {
-  rose:    { border: "border-rose-700/50",    badge: "bg-rose-900/60 text-rose-300",       icon: "text-rose-400",    highlight: "bg-rose-950/40 border-rose-700/40",    label: "text-rose-400" },
-  indigo:  { border: "border-indigo-700/50",  badge: "bg-indigo-900/60 text-indigo-300",   icon: "text-indigo-400",  highlight: "bg-indigo-950/40 border-indigo-700/40",  label: "text-indigo-400" },
-  teal:    { border: "border-teal-700/50",    badge: "bg-teal-900/60 text-teal-300",       icon: "text-teal-400",    highlight: "bg-teal-950/40 border-teal-700/40",      label: "text-teal-400" },
-  emerald: { border: "border-emerald-700/50", badge: "bg-emerald-900/60 text-emerald-300", icon: "text-emerald-400", highlight: "bg-emerald-950/40 border-emerald-700/40", label: "text-emerald-400" },
-  fuchsia: { border: "border-fuchsia-700/50", badge: "bg-fuchsia-900/60 text-fuchsia-300", icon: "text-fuchsia-400", highlight: "bg-fuchsia-950/40 border-fuchsia-700/40", label: "text-fuchsia-400" },
-  green:   { border: "border-green-700/50",   badge: "bg-green-900/60 text-green-300",     icon: "text-green-400",   highlight: "bg-green-950/40 border-green-700/40",    label: "text-green-400" },
-  amber:   { border: "border-amber-700/50",   badge: "bg-amber-900/60 text-amber-300",     icon: "text-amber-400",   highlight: "bg-amber-950/40 border-amber-700/40",    label: "text-amber-400" },
-  sky:     { border: "border-sky-700/50",     badge: "bg-sky-900/60 text-sky-300",         icon: "text-sky-400",     highlight: "bg-sky-950/40 border-sky-700/40",        label: "text-sky-400" },
-  blue:    { border: "border-blue-700/50",    badge: "bg-blue-900/60 text-blue-300",       icon: "text-blue-400",    highlight: "bg-blue-950/40 border-blue-700/40",      label: "text-blue-400" },
-  violet:  { border: "border-violet-700/50",  badge: "bg-violet-900/60 text-violet-300",   icon: "text-violet-400",  highlight: "bg-violet-950/40 border-violet-700/40",  label: "text-violet-400" },
-  pink:    { border: "border-pink-700/50",    badge: "bg-pink-900/60 text-pink-300",       icon: "text-pink-400",    highlight: "bg-pink-950/40 border-pink-700/40",      label: "text-pink-400" },
-  slate:   { border: "border-slate-600/50",   badge: "bg-slate-700/60 text-slate-300",     icon: "text-slate-400",   highlight: "bg-slate-800/40 border-slate-600/40",    label: "text-slate-400" },
-};
+const closingScript = [
+  "Se a pergunta depende de informação viva, privada e auditável, precisamos de retrieval antes de geração.",
+  "Nosso projeto já mostra a espinha dorsal certa; o próximo passo é subir o nível do retrieval, não trocar tudo de novo.",
+  "Em resumo: RAG resolve o presente, hybrid search melhora o resultado agora e agentic RAG abre o futuro quando a complexidade pedir.",
+];
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   COMPONENTE
-   ───────────────────────────────────────────────────────────────────────────── */
+function SectionPanel({ panel, tone }: { panel: PanelKey; tone: Tone }) {
+  const palette = toneStyles[tone];
 
-export default function ApresentacaoPage() {
-  const [open, setOpen] = useState<number | null>(1);
-  const [showAll, setShowAll] = useState(false);
+  if (panel === "problem") {
+    return (
+      <div className="space-y-4">
+        <div className={`rounded-[28px] border p-5 ${palette.border} ${palette.panel}`}>
+          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>Onde o LLM puro falha</p>
+          <div className="mt-4 grid gap-3">
+            {[
+              "Conhecimento congelado",
+              "Documentos internos fora do treino",
+              "Resposta sem prova de origem",
+            ].map((item) => (
+              <div key={item} className="rounded-2xl border border-white/60 bg-white/70 px-4 py-3 text-sm font-semibold text-slate-700">
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+          {[
+            { value: "Atualidade", label: "sem retrieval não existe garantia" },
+            { value: "Privacidade", label: "o modelo não nasceu sabendo seu domínio" },
+            { value: "Auditoria", label: "sem fonte, não existe confiança operacional" },
+          ].map((item) => (
+            <div key={item.value} className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+              <p className="text-sm font-semibold text-slate-900">{item.value}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{item.label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-  const visibleSlides = showAll ? SLIDES : SLIDES.slice(0, 1);
+  if (panel === "concept") {
+    return (
+      <div className="space-y-4">
+        {[
+          { title: "Retrieve", body: "Busca só o material relevante para a pergunta atual." },
+          { title: "Augment", body: "Insere esses trechos no prompt como contexto factual." },
+          { title: "Generate", body: "O LLM responde sobre evidência recuperada, não apenas sobre memória." },
+        ].map((item, index) => (
+          <div key={item.title} className={`rounded-[28px] border p-5 ${index === 1 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>{item.title}</p>
+            <p className="mt-3 text-sm leading-6 text-slate-700">{item.body}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "pipeline") {
+    const phases = [
+      {
+        title: "Indexação offline",
+        steps: ["PDFs e docs", "Loader", "Chunks", "Embeddings", "pgvector"],
+      },
+      {
+        title: "Consulta online",
+        steps: ["Pergunta", "Embedding", "Busca top-k", "Prompt com contexto", "Resposta com fonte"],
+      },
+    ];
+
+    return (
+      <div className="space-y-4">
+        {phases.map((phase) => (
+          <div key={phase.title} className={`rounded-[28px] border p-5 ${palette.border} ${palette.soft}`}>
+            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>{phase.title}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {phase.steps.map((step, index) => (
+                <div key={step} className="flex items-center gap-2">
+                  <span className="rounded-full border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold text-slate-700">
+                    {step}
+                  </span>
+                  {index < phase.steps.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-slate-400" />}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "types") {
+    return (
+      <div className="grid gap-3">
+        {[
+          { title: "Naive", body: "Busca e gera. Ótimo para prova de conceito." },
+          { title: "Advanced", body: "Query expansion, hybrid search e reranking para subir qualidade." },
+          { title: "Modular", body: "Blocos independentes para trocar search, routing e memory." },
+          { title: "Agentic", body: "O modelo decide quando buscar e como encadear as buscas." },
+        ].map((item, index) => (
+          <div key={item.title} className={`rounded-[24px] border p-4 ${index === 1 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{item.body}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "techniques") {
+    return (
+      <div className="space-y-3">
+        {[
+          { title: "Hybrid Search + RRF", value: "baseline recomendado" },
+          { title: "Cross-encoder rerank", value: "mais precisão no top final" },
+          { title: "FAIR-RAG", value: "fecha lacunas iterativamente" },
+          { title: "REFRAG", value: "30x mais rápido no paper" },
+          { title: "RAG-Gym", value: "+24% em generalização" },
+        ].map((item, index) => (
+          <div key={item.title} className={`rounded-[24px] border p-4 ${index === 0 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+            <p className={`mt-1 text-xs font-semibold uppercase tracking-[0.2em] ${palette.accent}`}>{item.value}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "graph") {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+            <p className="text-sm font-semibold text-slate-900">Vetorial</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Excelente para FAQs, documentação simples e perguntas locais.</p>
+          </div>
+          <div className={`rounded-[24px] border p-4 ${palette.border} ${palette.panel}`}>
+            <p className="text-sm font-semibold text-slate-900">GraphRAG</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Melhor quando a resposta depende de cadeia causal, comunidade ou relacionamento explícito.</p>
+          </div>
+        </div>
+        <div className="rounded-[28px] border border-slate-200 bg-white/80 p-5">
+          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>Quando o grafo faz sentido</p>
+          <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-700">
+            <li>Jurídico, médico e financeiro com forte dependência de entidades.</li>
+            <li>Incidentes com times, serviços, causa raiz e impacto cruzado.</li>
+            <li>Perguntas multi-hop em que o documento relevante depende da relação entre fontes.</li>
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  if (panel === "cost") {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <div className={`rounded-[24px] border p-4 ${palette.border} ${palette.panel}`}>
+            <p className="text-sm font-semibold text-slate-900">RAG</p>
+            <p className={`mt-2 text-3xl font-semibold ${palette.accent}`} style={{ fontFamily: "var(--font-display)" }}>
+              ~$60/mês
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Top-5 chunks, cerca de 5k tokens por query.</p>
+          </div>
+          <div className="rounded-[24px] border border-slate-200 bg-white/80 p-4">
+            <p className="text-sm font-semibold text-slate-900">Long context</p>
+            <p className="mt-2 text-3xl font-semibold text-slate-900" style={{ fontFamily: "var(--font-display)" }}>
+              ~$105k/mês
+            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">1M de tokens em 1.000 queries por dia.</p>
+          </div>
+        </div>
+        <div className="rounded-[28px] border border-slate-200 bg-white/80 p-5">
+          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>O que faz a conta fechar</p>
+          <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-700">
+            <li>Custo de inferência.</li>
+            <li>Latência para primeiro token.</li>
+            <li>Privacidade ao evitar enviar a base inteira a cada chamada.</li>
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  if (panel === "decision") {
+    return (
+      <div className="space-y-3">
+        {[
+          "O dado é privado ou interno? Se sim, RAG entra imediatamente.",
+          "A informação muda toda semana? Se sim, retrieval vale mais que retreino.",
+          "Precisa citar fonte? RAG entrega auditabilidade nativa.",
+          "São poucos documentos curtos? Talvez long context simples já resolva.",
+        ].map((item, index) => (
+          <div key={item} className={`rounded-[24px] border p-4 ${index === 0 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+            <p className="text-sm leading-6 text-slate-700">{item}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "stack") {
+    return (
+      <div className="space-y-3">
+        {[
+          "FastAPI + OTLP",
+          "LangChain e LlamaIndex",
+          "pgvector no PostgreSQL",
+          "Ollama com embeddings e LLM local",
+          "Grafana, Tempo, Loki e Prometheus",
+        ].map((item, index) => (
+          <div key={item} className={`rounded-[24px] border p-4 ${index === 2 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+            <p className="text-sm font-semibold text-slate-900">{item}</p>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (panel === "mapreduce") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-[28px] border border-slate-200 bg-white/80 p-5">
+          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>Leitura em dois níveis</p>
+          <div className="mt-4 grid gap-3">
+            {[
+              "1. Resumo por documento para triagem barata.",
+              "2. Seleção dos documentos críticos.",
+              "3. Leitura profunda só dos escolhidos.",
+            ].map((item) => (
+              <div key={item} className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={`rounded-[28px] border p-5 ${palette.border} ${palette.panel}`}>
+          <p className="text-sm font-semibold text-slate-900">Cobertura esperada</p>
+          <p className={`mt-2 text-3xl font-semibold ${palette.accent}`} style={{ fontFamily: "var(--font-display)" }}>
+            ~95%
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">Por uma fração do custo do long context completo.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (panel === "evaluation") {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          {[
+            "Recall@K",
+            "Precision@K",
+            "Faithfulness",
+            "Answer relevancy",
+          ].map((item, index) => (
+            <div key={item} className={`rounded-[24px] border p-4 ${index === 2 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+              <p className="text-sm font-semibold text-slate-900">{item}</p>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-[28px] border border-slate-200 bg-white/80 p-5">
+          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>Camadas de avaliação</p>
+          <div className="mt-4 space-y-3 text-sm leading-6 text-slate-700">
+            <p>Humana: menos frequente, mais confiável.</p>
+            <p>LLM-as-a-judge: escala com custo moderado.</p>
+            <p>Métricas automáticas: monitoramento contínuo.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-4xl mx-auto pb-16">
-
-      {/* ── Header ── */}
-      <div className="mb-8">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 uppercase tracking-wide">
-            Apresentação para a Equipe
-          </span>
+    <div className="space-y-4">
+      {[
+        { title: "Curto prazo", body: "Hybrid search, reranking e filtros por metadados." },
+        { title: "Médio prazo", body: "Agentic RAG, multi-hop e GraphRAG onde fizer sentido." },
+        { title: "Longo prazo", body: "Multimodalidade, OCR estruturado e compressão de contexto." },
+      ].map((item, index) => (
+        <div key={item.title} className={`rounded-[28px] border p-5 ${index === 0 ? `${palette.border} ${palette.panel}` : "border-slate-200 bg-white/80"}`}>
+          <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{item.body}</p>
         </div>
-        <h1 className="text-3xl font-bold text-white mb-2">
-          RAG — Retrieval-Augmented Generation
-        </h1>
-        <p className="text-gray-400 text-sm leading-relaxed max-w-2xl">
-          Do problema ao estado da arte. Cada seção é um tópico de apresentação — expanda para ver
-          os pontos e o exemplo concreto que você usa para explicar.
-        </p>
-        <div className="flex items-center gap-4 mt-4 text-xs text-gray-500">
-          <span>{SLIDES.length} tópicos</span>
-          <span>·</span>
-          <span>43 artigos científicos (2023–2025)</span>
-          <span>·</span>
-          <span>REFRAG · RAG-Gym · FAIR-RAG · GraphRAG</span>
-        </div>
-      </div>
+      ))}
+    </div>
+  );
+}
 
-      {/* ── Navegação rápida ── */}
-      <div className="flex flex-wrap gap-2 mb-8">
-        {SLIDES.map(s => {
-          const c = colorMap[s.color];
-          const isActive = open === s.id;
-          return (
-            <button
-              key={s.id}
-              onClick={() => { setOpen(s.id); setShowAll(true); }}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors font-medium ${
-                isActive
-                  ? `${c.badge} ${c.border}`
-                  : "bg-gray-800/60 border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200"
-              }`}
-            >
-              {s.id}. {s.title}
-            </button>
-          );
-        })}
-      </div>
+function PresentationSection({ section }: { section: Section }) {
+  const palette = toneStyles[section.tone];
+  const Icon = section.icon;
 
-      {/* ── Slides ── */}
-      <div className="space-y-3">
-        {SLIDES.map((slide) => {
-          const c = colorMap[slide.color];
-          const isOpen = open === slide.id;
-          const Icon = slide.icon;
+  return (
+    <article
+      id={section.id}
+      className="scroll-mt-24 rounded-[32px] border border-[#d9d0c2] bg-[var(--deck-paper)]/98 shadow-[0_24px_80px_-40px_rgba(19,34,56,0.42)]"
+    >
+      <div className="grid gap-8 p-6 sm:p-8 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] ${palette.badge}`}>
+              <span className={`h-2.5 w-2.5 rounded-full ${palette.dot}`} />
+              {section.number}
+            </span>
+            <span className="text-sm font-semibold text-slate-500">{section.subtitle}</span>
+          </div>
 
-          return (
-            <div
-              key={slide.id}
-              id={`slide-${slide.id}`}
-              className={`border rounded-2xl overflow-hidden bg-gray-900/50 transition-all ${c.border}`}
-            >
-              {/* Header do slide */}
-              <button
-                className="w-full flex items-center gap-4 px-6 py-5 text-left hover:bg-white/[0.02] transition-colors"
-                onClick={() => setOpen(isOpen ? null : slide.id)}
-              >
-                {/* Número */}
-                <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${c.badge}`}>
-                  {slide.id}
-                </div>
-
-                {/* Ícone */}
-                <Icon size={18} className={`shrink-0 ${c.icon}`} />
-
-                {/* Texto */}
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-white text-base leading-tight">{slide.title}</div>
-                  <div className="text-gray-400 text-xs mt-0.5">{slide.subtitle}</div>
-                </div>
-
-                {/* Chevron */}
-                {isOpen
-                  ? <ChevronUp size={16} className="text-gray-500 shrink-0" />
-                  : <ChevronDown size={16} className="text-gray-500 shrink-0" />}
-              </button>
-
-              {/* Conteúdo expandido */}
-              {isOpen && (
-                <div className="px-6 pb-6 pt-2 space-y-5">
-
-                  {/* Bullets */}
-                  <ul className="space-y-3">
-                    {slide.bullets.map((b, i) => (
-                      <li key={i} className="flex items-start gap-3">
-                        <span className="text-lg shrink-0 mt-0.5 leading-none">{b.icon}</span>
-                        <span className="text-gray-200 text-sm leading-relaxed">{b.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  {/* Highlight box */}
-                  <div className={`rounded-xl border p-4 ${c.highlight}`}>
-                    <div className={`text-xs font-semibold uppercase tracking-wide mb-3 ${c.label}`}>
-                      {slide.highlight.label}
-                    </div>
-                    <pre className="text-sm text-gray-200 whitespace-pre-wrap font-mono leading-relaxed">
-                      {slide.highlight.content}
-                    </pre>
-                  </div>
-
-                  {/* Navegação */}
-                  <div className="flex items-center justify-between pt-2 border-t border-gray-800">
-                    <button
-                      onClick={() => {
-                        if (slide.id > 1) setOpen(slide.id - 1);
-                      }}
-                      disabled={slide.id === 1}
-                      className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 transition-colors"
-                    >
-                      ← anterior
-                    </button>
-                    <span className="text-xs text-gray-600">{slide.id} / {SLIDES.length}</span>
-                    <button
-                      onClick={() => {
-                        if (slide.id < SLIDES.length) setOpen(slide.id + 1);
-                      }}
-                      disabled={slide.id === SLIDES.length}
-                      className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1 transition-colors"
-                    >
-                      próximo <ArrowRight size={12} />
-                    </button>
-                  </div>
-                </div>
-              )}
+          <div className="flex items-start gap-4">
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${palette.border} ${palette.panel}`}>
+              <Icon className={`h-5 w-5 ${palette.accent}`} />
             </div>
-          );
-        })}
-      </div>
+            <div>
+              <h2 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl" style={{ fontFamily: "var(--font-display)" }}>
+                {section.title}
+              </h2>
+              <p className="mt-2 max-w-3xl text-lg leading-8 text-slate-700">{section.summary}</p>
+            </div>
+          </div>
 
-      {/* ── Footer ── */}
-      <div className="mt-10 text-center text-xs text-gray-600">
-        Baseado em análise de 43 artigos científicos (2023–2025) ·
-        REFRAG (Meta) · RAG-Gym (UVA/NIH) · FAIR-RAG (Sharif) · RAG-Star (Renmin University) · IBM Blended RAG
+          <ul className="grid gap-3">
+            {section.bullets.map((bullet, index) => (
+              <li key={`${section.id}-${index}`} className="flex items-start gap-3 rounded-[24px] border border-slate-200/80 bg-white/75 px-4 py-3">
+                <span className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${palette.dot}`} />
+                <span className="text-base leading-7 text-slate-700">{bullet}</span>
+              </li>
+            ))}
+          </ul>
+
+          <div className={`rounded-[28px] border p-5 ${palette.border} ${palette.soft}`}>
+            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${palette.accent}`}>{section.calloutTitle}</p>
+            <div className="mt-4 space-y-3 text-base leading-7 text-slate-700">
+              {section.calloutLines.map((line, index) => (
+                <p key={`${section.id}-callout-${index}`}>{line}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <SectionPanel panel={section.panel} tone={section.tone} />
+      </div>
+    </article>
+  );
+}
+
+export default function ApresentacaoPage() {
+  return (
+    <div
+      className={`${displayFont.variable} ${bodyFont.variable} min-h-screen bg-[#132238] text-[#f6f1e8]`}
+      style={{
+        fontFamily: "var(--font-body)",
+        scrollBehavior: "smooth",
+      }}
+    >
+      <div className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(239,107,63,0.25),transparent_30%),radial-gradient(circle_at_top_right,rgba(43,157,143,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.06),transparent_42%)]" />
+
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-[#132238]/85 backdrop-blur-xl">
+          <div className="mx-auto flex max-w-[1500px] items-center justify-between px-4 py-4 sm:px-6 lg:px-10">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-[#f4c86c]">RAG deck</p>
+              <p className="text-sm text-white/70">Apresentação para o time</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold sm:text-sm">
+              <Link href="/guide" className="rounded-full border border-white/15 px-4 py-2 text-white/80 transition hover:border-white/30 hover:text-white">
+                Guia
+              </Link>
+              <Link href="/chat" className="rounded-full border border-white/15 px-4 py-2 text-white/80 transition hover:border-white/30 hover:text-white">
+                Chat
+              </Link>
+              <Link href="/explorer" className="rounded-full bg-white px-4 py-2 text-slate-900 transition hover:bg-[#fff1dc]">
+                Voltar ao app
+              </Link>
+            </div>
+          </div>
+        </header>
+
+        <main className="relative mx-auto max-w-[1500px] px-4 pb-20 pt-6 sm:px-6 lg:px-10">
+          <div className="grid gap-8 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <aside className="space-y-6 self-start lg:sticky lg:top-24">
+              <div className="rounded-[30px] border border-white/10 bg-white/6 p-6 backdrop-blur">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-[#f4c86c]">Formato</p>
+                <h2 className="mt-3 text-2xl font-semibold text-white" style={{ fontFamily: "var(--font-display)" }}>
+                  Roteiro pronto para apresentar
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-white/72">
+                  Página vertical, com saltos rápidos por capítulo e blocos pensados para fala curta em reunião.
+                </p>
+                <div className="mt-5 grid gap-3 text-sm text-white/78">
+                  <div className="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">Tempo sugerido: 12 a 15 minutos</div>
+                  <div className="rounded-2xl border border-white/10 bg-black/10 px-4 py-3">Base: 43 artigos científicos entre 2023 e 2025</div>
+                </div>
+              </div>
+
+              <nav className="rounded-[30px] border border-white/10 bg-white/6 p-3 backdrop-blur">
+                {sections.map((section) => (
+                  <a
+                    key={section.id}
+                    href={`#${section.id}`}
+                    className="flex items-center justify-between rounded-2xl px-4 py-3 text-sm text-white/72 transition hover:bg-white/8 hover:text-white"
+                  >
+                    <span>{section.number}. {section.title}</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </a>
+                ))}
+              </nav>
+
+              <div className="rounded-[30px] border border-white/10 bg-white/6 p-6 backdrop-blur">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-[#f4c86c]">Mensagem central</p>
+                <ul className="mt-4 space-y-3 text-sm leading-6 text-white/72">
+                  <li>RAG resolve um problema de acesso a conhecimento, não um problema de estilo de resposta.</li>
+                  <li>Retrieval bom vale mais do que aumentar contexto sem critério.</li>
+                  <li>O próximo ganho mais pragmático está em hybrid search e reranking.</li>
+                </ul>
+              </div>
+            </aside>
+
+            <div className="space-y-8">
+              <section className="overflow-hidden rounded-[38px] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.1),rgba(255,255,255,0.03))] p-8 shadow-[0_32px_120px_-55px_rgba(0,0,0,0.7)] sm:p-10 lg:p-12">
+                <div className="grid gap-10 xl:grid-cols-[minmax(0,1.05fr)_360px] xl:items-start">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-[#f4c86c]">Retrieval-Augmented Generation</p>
+                    <h1 className="mt-4 max-w-4xl text-5xl font-semibold tracking-tight text-white sm:text-6xl lg:text-7xl" style={{ fontFamily: "var(--font-display)" }}>
+                      Uma apresentação clara de RAG para o time entender o que realmente importa.
+                    </h1>
+                    <p className="mt-6 max-w-3xl text-lg leading-8 text-white/78 sm:text-xl">
+                      A história desta página vai da dor real do LLM sem contexto até o roadmap prático: retrieval híbrido, reranking, GraphRAG e agentic RAG.
+                    </p>
+
+                    <div className="mt-8 flex flex-wrap gap-3">
+                      <Link href="/guide" className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-[#fff1dc]">
+                        Abrir guia detalhado
+                      </Link>
+                      <Link href="/chat" className="rounded-full border border-white/15 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-white/8">
+                        Testar o chat
+                      </Link>
+                      <Link href="/explorer" className="rounded-full border border-white/15 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/30 hover:bg-white/8">
+                        Ver chunks e embeddings
+                      </Link>
+                    </div>
+
+                    <div className="mt-10 grid gap-4 md:grid-cols-3">
+                      {heroStats.map((stat) => (
+                        <div key={stat.label} className="rounded-[26px] border border-white/10 bg-black/12 p-5 backdrop-blur-sm">
+                          <p className="text-3xl font-semibold text-white sm:text-4xl" style={{ fontFamily: "var(--font-display)" }}>
+                            {stat.value}
+                          </p>
+                          <p className="mt-1 text-sm font-semibold uppercase tracking-[0.24em] text-[#f4c86c]">{stat.label}</p>
+                          <p className="mt-3 text-sm leading-6 text-white/72">{stat.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[32px] border border-white/10 bg-[#0d1828]/65 p-6 backdrop-blur-sm">
+                    <div className="flex items-center gap-3 text-[#f4c86c]">
+                      <Bot className="h-5 w-5" />
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.3em]">Estrutura da fala</p>
+                    </div>
+                    <div className="mt-5 space-y-3">
+                      {flowHighlights.map((item, index) => (
+                        <div key={item} className="rounded-[24px] border border-white/10 bg-white/6 px-4 py-4">
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/42">Bloco {index + 1}</p>
+                          <p className="mt-2 text-sm leading-6 text-white/78">{item}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-6 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+                      {[
+                        { icon: BookOpen, label: "Guia", text: "material de apoio técnico" },
+                        { icon: MessageSquare, label: "Chat", text: "perguntas ao vivo com a base" },
+                        { icon: Search, label: "Explorer", text: "inspeção de chunks e embeddings" },
+                      ].map(({ icon: Icon, label, text }) => (
+                        <div key={label} className="rounded-[24px] border border-white/10 bg-white/6 p-4">
+                          <Icon className="h-4 w-4 text-[#f4c86c]" />
+                          <p className="mt-3 text-sm font-semibold text-white">{label}</p>
+                          <p className="mt-1 text-sm leading-6 text-white/68">{text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {sections.map((section) => (
+                <PresentationSection key={section.id} section={section} />
+              ))}
+
+              <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="rounded-[32px] border border-[#d9d0c2] bg-[var(--deck-paper)] p-6 shadow-[0_24px_80px_-40px_rgba(19,34,56,0.42)] sm:p-8">
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#a33b1a]">Os 5 pontos que ficam</p>
+                  <div className="mt-5 grid gap-3">
+                    {takeaways.map((item, index) => (
+                      <div key={item} className="flex items-start gap-4 rounded-[24px] border border-slate-200 bg-white/75 px-4 py-4">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#132238] text-sm font-semibold text-white">
+                          {index + 1}
+                        </span>
+                        <p className="text-base leading-7 text-slate-700">{item}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-[32px] border border-white/10 bg-white/6 p-6 backdrop-blur sm:p-8">
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#f4c86c]">Fechamento sugerido</p>
+                  <div className="mt-5 space-y-4">
+                    {closingScript.map((line, index) => (
+                      <div key={line} className="rounded-[24px] border border-white/10 bg-black/10 px-4 py-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-white/42">Frase {index + 1}</p>
+                        <p className="mt-2 text-sm leading-6 text-white/78">{line}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-6 text-xs leading-6 text-white/52">
+                    Baseado em análise de 43 artigos científicos, incluindo REFRAG, RAG-Gym, FAIR-RAG, GraphRAG e blended retrieval.
+                  </p>
+                </div>
+              </section>
+            </div>
+          </div>
+        </main>
       </div>
     </div>
   );
