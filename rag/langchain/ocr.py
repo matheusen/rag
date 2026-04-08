@@ -12,6 +12,7 @@ from typing import Any
 from pypdf import PdfReader
 
 LOGGER = logging.getLogger(__name__)
+PROCESS_DISABLED_BACKENDS: set[str] = set()
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 VISUAL_EXTENSIONS = IMAGE_EXTENSIONS | {".pdf"}
@@ -299,7 +300,11 @@ def extract_ocr_assets(file_path: str, source_key: str) -> list[OCRAsset]:
     if not visual_assets:
         return []
 
-    backends = [backend for backend in _build_backends() if backend.enabled()]
+    backends = [
+        backend
+        for backend in _build_backends()
+        if backend.enabled() and getattr(backend, "name", "unknown") not in PROCESS_DISABLED_BACKENDS
+    ]
     if not backends:
         LOGGER.info("OCR habilitado, mas nenhum backend local foi configurado.")
         return []
@@ -319,8 +324,9 @@ def extract_ocr_assets(file_path: str, source_key: str) -> list[OCRAsset]:
             except Exception as exc:
                 backend_name = getattr(backend, "name", "unknown")
                 disabled_backends.add(backend_name)
+                PROCESS_DISABLED_BACKENDS.add(backend_name)
                 LOGGER.warning(
-                    "Falha no backend OCR; backend sera desabilitado para o restante desta ingestao.",
+                    "Falha no backend OCR; backend sera desabilitado para o restante deste processo.",
                     extra={"backend": backend_name, "asset": asset.asset_name, "error": str(exc)},
                 )
                 continue
