@@ -22,9 +22,15 @@ from dotenv import load_dotenv
 load_dotenv()  # carrega .env antes de qualquer import dos routers
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from api.routers import langchain as lc_router
 from api.routers import llamaindex as li_router
 from api.routers import sqlalchemy as sa_router
+from api.telemetry import setup_logging, setup_telemetry
+
+# Logging JSON estruturado deve ser o primeiro passo (antes de qualquer logger)
+setup_logging()
 
 app = FastAPI(
     title="RAG System",
@@ -37,6 +43,21 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Inicializa OpenTelemetry — deve vir após CORS e antes dos routers
+setup_telemetry(app)
+
+# Prometheus /metrics — scrapeado pelo Prometheus a cada 15s
+# Expõe histogramas de latência, contadores de request, etc. para todas as rotas
+Instrumentator().instrument(app).expose(app)
 
 app.include_router(lc_router.router)
 app.include_router(li_router.router)

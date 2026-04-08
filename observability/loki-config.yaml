@@ -1,0 +1,50 @@
+# Grafana Loki — agregação de logs
+#
+# CONCEITOS LOKI:
+#   "like Prometheus, but for logs"
+#   Loki NÃO indexa o conteúdo dos logs (ao contrário do Elasticsearch)
+#   Indexa apenas as LABELS (ex: job="rag-api", level="ERROR")
+#   Isso o torna muito mais barato em armazenamento e CPU
+#
+#   LogQL: linguagem de query do Loki
+#     {job="rag-api"} | json | level="ERROR"        → filtra por label + JSON field
+#     {job="rag-api"} | json | duration > 1s        → filtra por campo numérico
+#     rate({job="rag-api"}[5m])                     → taxa de logs por janela
+#
+#   Promtail: agente que coleta logs de arquivos/Docker e os envia ao Loki
+#   (similar ao FileBeat do Elasticsearch, ou ao Fluentd)
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h

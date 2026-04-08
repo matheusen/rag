@@ -32,8 +32,8 @@ from langchain_community.document_loaders import (
     TextLoader,
 )
 
-# Embeddings: wrapper do Vertex AI para gerar vetores
-from langchain_google_vertexai import VertexAIEmbeddings
+# Embeddings: wrapper do Ollama local para gerar vetores
+from langchain_ollama import OllamaEmbeddings
 
 # PGVector: VectorStore que usa PostgreSQL + extensão pgvector
 from langchain_postgres import PGVector
@@ -70,8 +70,9 @@ def get_vectorstore() -> PGVector:
     from sqlalchemy import create_engine
     from sqlalchemy.pool import NullPool
 
-    embeddings = VertexAIEmbeddings(
-        model_name=os.environ["GEMINI_EMBEDDING_MODEL"]
+    embeddings = OllamaEmbeddings(
+        model=os.environ["OLLAMA_EMBEDDING_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
     )
     connection_string = (
         f"postgresql+psycopg://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
@@ -171,13 +172,11 @@ def ingest(path: str, start_chunk: int = 0):
         print(f"  Retomando do chunk {start_chunk} (pulando delete_collection)")
 
     # Inicializar modelo de embeddings (reutilizado em todos os batches)
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        embedder = VertexAIEmbeddings(model_name=os.environ["GEMINI_EMBEDDING_MODEL"])
+    embedder = OllamaEmbeddings(
+        model=os.environ["OLLAMA_EMBEDDING_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
+    )
 
-    # Vertex AI: máx 250 instâncias E 20000 tokens por batch
-    # chunk_size=1000 chars ≈ 250 tokens cada → usa 50 chunks/batch
     batch_size = 50
     total_batches = -(-len(chunks) // batch_size)
     for i in range(start_chunk, len(chunks), batch_size):
@@ -195,8 +194,6 @@ def ingest(path: str, start_chunk: int = 0):
         _insert_batch_direct(texts, embeddings_list, metadatas)
 
         print(f"  Batch {batch_num}/{total_batches} salvo ({len(batch)} chunks)")
-        if i + batch_size < len(chunks):
-            time.sleep(30)  # pausa 30s para respeitar quota do Vertex AI
     print("  Embeddings salvos no pgvector com sucesso.")
 
 

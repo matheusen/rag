@@ -18,16 +18,20 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from opentelemetry import trace
 
 # Chains prontas para RAG
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_postgres import PGVector
 
 load_dotenv()
+
+# Tracer deste módulo — spans aparecem como "rag.langchain" no Jaeger
+tracer = trace.get_tracer("rag.langchain", "1.0.0")
 
 # O prompt define o comportamento do LLM.
 # {context} = documentos recuperados (injetados automaticamente pela chain)
@@ -41,7 +45,10 @@ PROMPT = ChatPromptTemplate.from_messages([
 
 
 def get_vectorstore() -> PGVector:
-    embeddings = VertexAIEmbeddings(model_name=os.environ["GEMINI_EMBEDDING_MODEL"])
+    embeddings = OllamaEmbeddings(
+        model=os.environ["OLLAMA_EMBEDDING_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
+    )
     connection = (
         f"postgresql+psycopg://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
         f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
@@ -55,23 +62,35 @@ def get_vectorstore() -> PGVector:
 
 
 def query(question: str, k: int = 4) -> str:
-    vs = get_vectorstore()
+    with tracer.start_as_current_span("langchain.rag.query") as span:
+        span.set_attribute("rag.question", question)
+        span.set_attribute("rag.k", k)
+        span.set_attribute("rag.framework", "langchain")
 
-    # Retriever: busca os k chunks mais similares por cosine similarity
-    retriever = vs.as_retriever(search_kwargs={"k": k})
+        vs = get_vectorstore()
 
-    llm = ChatVertexAI(model_name=os.environ["GEMINI_LLM_MODEL"])
+        # Retriever: busca os k chunks mais similares por cosine similarity
+        retriever = vs.as_retriever(search_kwargs={"k": k})
 
-    # create_stuff_documents_chain: "enfia" (stuff) todos os docs no prompt de uma vez.
-    # Alternativas existentes: map_reduce (processa por partes), refine (itera doc a doc)
-    document_chain = create_stuff_documents_chain(llm, PROMPT)
+        llm = ChatOllama(
+            model=os.environ["OLLAMA_LLM_MODEL"],
+            base_url=os.environ["OLLAMA_BASE_URL"],
+        )
 
-    # create_retrieval_chain combina: retriever → document_chain
-    chain = create_retrieval_chain(retriever, document_chain)
+        # create_stuff_documents_chain: "enfia" (stuff) todos os docs no prompt de uma vez.
+        # Alternativas existentes: map_reduce (processa por partes), refine (itera doc a doc)
+        document_chain = create_stuff_documents_chain(llm, PROMPT)
 
-    # .invoke() retorna dict com chaves: "input", "context" (docs usados) e "answer"
-    result = chain.invoke({"input": question})
-    return result["answer"]
+        # create_retrieval_chain combina: retriever → document_chain
+        chain = create_retrieval_chain(retriever, document_chain)
+
+        # .invoke() retorna dict com chaves: "input", "context" (docs usados) e "answer"
+        with tracer.start_as_current_span("langchain.chain.invoke") as invoke_span:
+            result = chain.invoke({"input": question})
+            invoke_span.set_attribute("rag.chunks_retrieved", len(result.get("context", [])))
+
+        span.set_attribute("rag.answer_length", len(result["answer"]))
+        return result["answer"]
 
 
 if __name__ == "__main__":

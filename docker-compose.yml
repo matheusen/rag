@@ -1,0 +1,167 @@
+# RAG System — Docker Compose
+#
+# Stack de Observabilidade completa:
+#
+#   Traces  → OTel Collector → Jaeger (UI: 16686)
+#                           → Grafana Tempo (via Grafana: 3000)
+#   Metrics → Prometheus (9090) ← scrape /metrics do FastAPI
+#   Logs    → Promtail → Loki ← Grafana
+#   UI      → Grafana (3000) — dashboards unificados
+#
+# Fluxo de traces:
+#   FastAPI app → OTLP HTTP (4318) → otel-collector → jaeger:4317 (interno)
+#                                                   → tempo:4317  (interno)
+#
+# Iniciar tudo:
+#   docker compose up -d
+#
+# UIs:
+#   Grafana  : http://localhost:3000  (admin/admin)
+#   Jaeger   : http://localhost:16686
+#   Prometheus: http://localhost:9090
+
+services:
+  # ── Banco de dados ──────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: tabzer-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ragsys
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # ── LLMs locais ─────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ragops-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  # ── OTel Collector — hub central de telemetria ──────────────────────────────
+  # Recebe traces da app (OTLP) e distribui para Jaeger e Tempo.
+  # Vantagem: a app só precisa conhecer 1 endpoint. Backends podem mudar sem
+  # alterar código da app.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: ragops-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC  (FastAPI → Collector)
+      - "4318:4318"   # OTLP HTTP  (FastAPI → Collector, usado pelo SDK Python)
+      - "8888:8888"   # métricas internas do Collector (Prometheus scrape)
+    depends_on:
+      - jaeger
+      - tempo
+
+  # ── Jaeger — visualização de traces ─────────────────────────────────────────
+  # Recebe traces do OTel Collector (internamente via OTLP gRPC).
+  # NÃO expõe 4317/4318 ao host — o Collector é o único entry point externo.
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: ragops-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+  # ── Grafana Tempo — backend de traces integrado ao Grafana ──────────────────
+  # Alternativa ao Jaeger: armazena traces e os expõe via API para o Grafana.
+  # Diferencial: correlação nativa com Loki (clica no span → vê logs relacionados)
+  tempo:
+    image: grafana/tempo:2.7.2
+    container_name: ragops-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo-config.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo query API (Grafana acessa aqui)
+
+  # ── Prometheus — coleta de métricas ─────────────────────────────────────────
+  # Modelo PULL: scrape o endpoint /metrics do FastAPI a cada 15s.
+  # Diferente do OTel PUSH onde a app envia dados pro backend.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ragops-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"      # permite reload via POST /-/reload
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"   # Prometheus UI + API
+
+  # ── Loki — agregação de logs ─────────────────────────────────────────────────
+  # "Prometheus, mas para logs": indexa apenas labels, não o conteúdo.
+  # Muito mais barato que Elasticsearch em armazenamento e CPU.
+  loki:
+    image: grafana/loki:latest
+    container_name: ragops-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"   # Loki API (Grafana + Promtail acessam aqui)
+
+  # ── Promtail — agente de coleta de logs ─────────────────────────────────────
+  # Monitora o arquivo logs/api.log gerado pelo FastAPI e envia ao Loki.
+  # Faz parsing do JSON de cada linha e extrai labels (level, logger, etc.)
+  promtail:
+    image: grafana/promtail:latest
+    container_name: ragops-promtail
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/config.yml:ro
+      - ./logs:/logs:ro   # monta o diretório de logs do host (somente leitura)
+    depends_on:
+      - loki
+
+  # ── Grafana — UI unificada ───────────────────────────────────────────────────
+  # Dashboard único para Prometheus (metrics), Tempo (traces) e Loki (logs).
+  # Data sources provisionados automaticamente via datasources.yaml.
+  # Login padrão: admin / admin
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ragops-grafana
+    restart: unless-stopped
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true          # permite acesso sem login (dev)
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin        # anônimo tem acesso admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor # habilita editor TraceQL (Tempo)
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3030:3000"   # Grafana UI  (host:3030 → container:3000)
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+volumes:
+  pgdata:
+  ollama_data:
+  tempo_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:

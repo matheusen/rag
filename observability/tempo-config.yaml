@@ -1,0 +1,30 @@
+# Grafana Tempo — backend de traces distribuídos
+#
+# CONCEITOS TEMPO:
+#   distributor : recebe spans via OTLP/Zipkin/Jaeger
+#   storage     : persiste blocos de traces (WAL para durabilidade)
+#   querier     : responde buscas do Grafana por TraceID
+#
+# Diferença Jaeger vs Tempo:
+#   Jaeger → UI própria, search por serviço/operação, mais recursos de UI
+#   Tempo  → integrado ao Grafana, search por TraceID, correlação com Loki
+
+server:
+  http_listen_port: 3200        # Grafana acessa aqui para queries
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317   # recebe do OTel Collector
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal        # Write-Ahead Log — evita perda de spans em crash

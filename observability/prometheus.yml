@@ -1,0 +1,44 @@
+# Prometheus — coleta de métricas
+#
+# CONCEITOS PROMETHEUS:
+#   Modelo PULL: Prometheus chama o endpoint /metrics do serviço a cada scrape_interval
+#   (diferente do OTel PUSH onde a app empurra os dados)
+#
+#   Tipos de métricas:
+#     Counter   : só aumenta (ex: requests_total)
+#     Gauge     : sobe e desce (ex: conexões ativas, uso de memória)
+#     Histogram : distribui observações em buckets (ex: latência por percentil)
+#     Summary   : similar ao Histogram, calcula quantis no lado da app
+#
+#   PromQL: linguagem de query
+#     rate(http_requests_total[5m])                   → taxa de requests
+#     histogram_quantile(0.95, http_duration_seconds) → p95 de latência
+#     sum by (method) (http_requests_total)           → agrupado por método HTTP
+#
+#   Labels: dimensões das métricas (method, route, status_code, etc.)
+#   Alertmanager: recebe alertas definidos em rules e notifica (Slack, email, etc.)
+
+global:
+  scrape_interval: 15s        # coleta métricas a cada 15s
+  evaluation_interval: 15s    # avalia rules de alerta a cada 15s
+
+scrape_configs:
+  # ── FastAPI app (rodando no host) ─────────────────────────────────────────
+  # host.docker.internal = hostname especial do Docker Desktop que resolve para o host
+  - job_name: rag-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:8000
+        labels:
+          service: rag-api
+          environment: development
+
+  # ── OTel Collector métricas internas ─────────────────────────────────────
+  - job_name: otel-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - otel-collector:8888
+        labels:
+          service: otel-collector

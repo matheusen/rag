@@ -1,0 +1,59 @@
+# Promtail — agente de coleta de logs para o Loki
+#
+# CONCEITOS PROMTAIL:
+#   positions : arquivo que rastreia onde parou de ler cada log (evita re-processar)
+#   clients   : para onde enviar os logs (Loki endpoint)
+#   scrape_configs : quais arquivos/streams de log monitorar e como rotulá-los
+#
+# Este Promtail monitora o arquivo logs/api.log gerado pelo FastAPI.
+# O arquivo é montado em /logs/api.log dentro do container.
+#
+# Pipeline de stages (processamento de cada linha de log):
+#   pipeline_stages:
+#     - json: extrai campos do JSON
+#     - labels: promove campos a labels Loki (indexados)
+#     - timestamp: define o timestamp real do evento
+#     - output: define o texto final da linha de log
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: rag-api
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: rag-api
+          service: fastapi
+          __path__: /logs/*.log   # monitora todos os .log no diretório montado
+
+    pipeline_stages:
+      # 1. Interpreta a linha como JSON
+      - json:
+          expressions:
+            level: levelname
+            logger: name
+            message: message
+            timestamp: asctime
+
+      # 2. Promove campos a labels Loki (mantém poucos labels — Loki é sensível a cardinalidade)
+      - labels:
+          level:
+          logger:
+
+      # 3. Define o timestamp real do log (para ordenação correta)
+      - timestamp:
+          source: timestamp
+          format: "2006-01-02 15:04:05,000"   # formato do python logging
+
+      # 4. Define o conteúdo visível da linha no Grafana
+      - output:
+          source: message

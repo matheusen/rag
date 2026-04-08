@@ -1,35 +1,122 @@
 # RAG System com PostgreSQL + pgvector
 
-Projeto de RAG com dois fluxos paralelos para comparacao:
+Projeto de RAG com dois fluxos paralelos para comparacao e aprendizado:
 
-- LangChain
-- LlamaIndex
+- **LangChain** — pipeline com `PGVector` + `create_retrieval_chain`
+- **LlamaIndex** — pipeline com `PGVectorStore` + `RetrieverQueryEngine`
 
 Ambos usam:
 
-- PostgreSQL com pgvector
-- SQLAlchemy 2.x
-- Google Vertex AI para embeddings e LLM
-- FastAPI para expor endpoints
+- PostgreSQL 16 + pgvector (embeddings vetoriais)
+- SQLAlchemy 2.x (ORM e inspeção das tabelas)
+- Ollama local (LLM e embeddings sem custo de API)
+- FastAPI (backend REST)
+- Next.js 16 (frontend de estudo e chat)
 
-## Estrutura principal
+Stack de observabilidade completa:
 
-- `rag/langchain/ingest.py`: ingestao de documentos via LangChain
-- `rag/langchain/query.py`: consulta RAG via LangChain
-- `rag/llamaindex/ingest.py`: ingestao de documentos via LlamaIndex
-- `rag/llamaindex/query.py`: consulta RAG via LlamaIndex
-- `api/main.py`: inicializacao da API FastAPI
-- `artigos/`: PDFs usados como base documental
-- `.env`: configuracao do ambiente
+- OpenTelemetry (traces distribuídos)
+- Jaeger (UI de traces)
+- Grafana + Tempo + Loki + Prometheus (métricas, logs e traces unificados)
+
+---
+
+## Estrutura do projeto
+
+```
+rag/
+├── api/
+│   ├── main.py              — FastAPI, CORS, OTel, Prometheus /metrics
+│   ├── telemetry.py         — setup OpenTelemetry + logging JSON
+│   ├── schemas.py           — modelos Pydantic
+│   └── routers/
+│       ├── langchain.py     — endpoints /langchain/*
+│       ├── llamaindex.py    — endpoints /llamaindex/*
+│       └── sqlalchemy.py    — endpoints /sqlalchemy/*
+├── rag/
+│   ├── langchain/
+│   │   ├── ingest.py        — ingestão PDF → chunks → PGVector
+│   │   └── query.py         — retrieval + ChatOllama (spans OTel)
+│   └── llamaindex/
+│       ├── ingest.py        — ingestão PDF → nodes → PGVectorStore
+│       └── query.py         — RetrieverQueryEngine (spans OTel)
+├── frontend/                — Next.js 16 (App Router + Tailwind)
+│   └── app/
+│       ├── explorer/        — inspetor SQLAlchemy (artigos/chunks)
+│       ├── chat/            — chat RAG (LangChain ou LlamaIndex)
+│       └── guide/           — guia de conceitos + treinador de entrevista
+├── observability/
+│   ├── otel-collector-config.yaml
+│   ├── tempo-config.yaml
+│   ├── loki-config.yaml
+│   ├── promtail-config.yaml
+│   ├── prometheus.yml
+│   └── grafana/provisioning/datasources/datasources.yaml
+├── artigos/                 — PDFs da base documental
+├── logs/                    — logs JSON do FastAPI (lidos pelo Promtail)
+├── docker-compose.yml       — todos os serviços
+└── .env                     — variáveis de ambiente
+```
+
+---
 
 ## Requisitos
 
-- Python 3.11
+- Python 3.11+
 - Docker Desktop
-- Conta Google Cloud com Vertex AI habilitado
-- Chave de servico com acesso ao Vertex AI
+- Node.js 18+
 
-## Instalacao do ambiente Python
+---
+
+## 1. Subir toda a infra com Docker Compose
+
+O `docker-compose.yml` sobe todos os serviços necessários:
+
+| Container | Imagem | Porta | Função |
+|---|---|---|---|
+| `tabzer-postgres` | pgvector/pgvector:pg16 | 5433 | PostgreSQL + pgvector |
+| `ragops-ollama` | ollama/ollama:latest | 11434 | LLMs locais |
+| `ragops-otel-collector` | otel/opentelemetry-collector-contrib | 4317, 4318 | Hub de traces |
+| `ragops-jaeger` | jaegertracing/all-in-one | 16686 | UI de traces |
+| `ragops-tempo` | grafana/tempo:2.7.2 | 3200 | Backend de traces |
+| `ragops-prometheus` | prom/prometheus | 9090 | Coleta de métricas |
+| `ragops-loki` | grafana/loki | 3100 | Agregação de logs |
+| `ragops-promtail` | grafana/promtail | — | Agente de coleta de logs |
+| `ragops-grafana` | grafana/grafana | 3030 | UI unificada |
+
+```powershell
+docker compose up -d
+```
+
+Verificar se todos estão rodando:
+
+```powershell
+docker ps --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}"
+```
+
+---
+
+## 2. Baixar os modelos Ollama
+
+Na primeira vez, é necessário baixar os modelos dentro do container:
+
+```powershell
+# Modelo de embeddings (768 dimensões — compatível com o schema do pgvector)
+docker exec ragops-ollama ollama pull nomic-embed-text
+
+# LLM para geração de respostas
+docker exec ragops-ollama ollama pull llama3.2
+```
+
+Verificar modelos disponíveis:
+
+```powershell
+docker exec ragops-ollama ollama list
+```
+
+---
+
+## 3. Configurar o ambiente Python
 
 ```powershell
 python -m venv .venv
@@ -37,201 +124,57 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-O arquivo `requirements.txt` ja inclui `SQLAlchemy==2.0.49`.
+---
 
-Se quiser instalar separadamente, o comando recomendado pela documentacao oficial e:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install SQLAlchemy
-```
-
-## Configuracao do .env
-
-Exemplo compativel com o projeto:
+## 4. Configurar o .env
 
 ```env
-GOOGLE_APPLICATION_CREDENTIALS=./api-project-1013904049487-5040f1347041.json
-GOOGLE_CLOUD_PROJECT=api-project-1013904049487
-GOOGLE_CLOUD_LOCATION=us-central1
-
 POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
+POSTGRES_PORT=5433
 POSTGRES_DB=ragsys
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
 
-GEMINI_EMBEDDING_MODEL=text-embedding-004
-GEMINI_LLM_MODEL=gemini-2.0-flash
+# Ollama local (Docker)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_LLM_MODEL=llama3.2
+
+# OpenTelemetry
+OTEL_SERVICE_NAME=rag-system
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 
-## PostgreSQL com pgvector via Docker
+---
 
-Neste projeto, a forma mais simples no Windows e usar a imagem Docker que ja vem com o pgvector embutido.
-
-Validacao da imagem:
-
-- `pgvector/pgvector:pg16` esta correta e e oficial do projeto pgvector para PostgreSQL 16.
-- A documentacao oficial do pgvector lista `pg16` como tag suportada, junto com variantes como `pg16-bookworm` e `0.8.2-pg16`.
-- Se quiser uma versao mais reprodutivel no README, a alternativa equivalente e `pgvector/pgvector:0.8.2-pg16`.
-- Mesmo usando a imagem correta, ainda e necessario rodar `CREATE EXTENSION IF NOT EXISTS vector;` dentro do database.
-
-### Subir o container
-
-```powershell
-docker pull pgvector/pgvector:pg16
-
-docker volume create ragsys_pg_data
-
-docker run --name tabzer-postgres `
-  -e POSTGRES_DB=ragsys `
-  -e POSTGRES_USER=postgres `
-  -e POSTGRES_PASSWORD=postgres `
-  -p 5432:5432 `
-  -v ragsys_pg_data:/var/lib/postgresql/data `
-  -d pgvector/pgvector:pg16
-```
-
-### Habilitar a extensao vector
+## 5. Habilitar a extensão pgvector
 
 ```powershell
 docker exec tabzer-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-### Comandos uteis do Docker
-
-Ver containers:
-
-```powershell
-docker ps -a
-```
-
-Ver logs:
-
-```powershell
-docker logs tabzer-postgres
-```
-
-Parar o container:
-
-```powershell
-docker stop tabzer-postgres
-```
-
-Iniciar novamente:
-
-```powershell
-docker start tabzer-postgres
-```
-
-Abrir shell SQL:
-
-```powershell
-docker exec -it tabzer-postgres psql -U postgres -d ragsys
-```
-
-Verificar se o pgvector esta habilitado:
+Verificar:
 
 ```sql
 SELECT extname FROM pg_extension WHERE extname = 'vector';
 ```
 
-## Script PowerShell para preparar PostgreSQL com pgvector
+---
 
-Se quiser automatizar a subida do PostgreSQL com pgvector, use este script:
+## 6. Ingestão de documentos
 
-```powershell
-param(
-    [string]$ContainerName = "tabzer-postgres",
-    [string]$VolumeName = "ragsys_pg_data",
-    [string]$Database = "ragsys",
-    [string]$User = "postgres",
-    [string]$Password = "postgres",
-    [int]$HostPort = 5432
-)
-
-$ErrorActionPreference = "Stop"
-
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker CLI nao encontrado. Instale o Docker Desktop antes de continuar."
-}
-
-Write-Host "Pull da imagem pgvector/pgvector:pg16..."
-docker pull pgvector/pgvector:pg16 | Out-Host
-
-$volumeExists = docker volume ls --format "{{.Name}}" | Select-String -SimpleMatch $VolumeName
-if (-not $volumeExists) {
-    Write-Host "Criando volume $VolumeName..."
-    docker volume create $VolumeName | Out-Host
-}
-
-$containerExists = docker ps -a --format "{{.Names}}" | Select-String -SimpleMatch $ContainerName
-if (-not $containerExists) {
-    Write-Host "Criando container $ContainerName..."
-    docker run --name $ContainerName `
-        -e POSTGRES_DB=$Database `
-        -e POSTGRES_USER=$User `
-        -e POSTGRES_PASSWORD=$Password `
-        -p "${HostPort}:5432" `
-        -v "${VolumeName}:/var/lib/postgresql/data" `
-        -d pgvector/pgvector:pg16 | Out-Host
-}
-else {
-    Write-Host "Container ja existe. Garantindo que esta em execucao..."
-    docker start $ContainerName | Out-Host
-}
-
-Write-Host "Aguardando PostgreSQL ficar pronto..."
-$maxAttempts = 30
-$attempt = 0
-$ready = $false
-
-while (-not $ready -and $attempt -lt $maxAttempts) {
-    $attempt++
-    try {
-        docker exec $ContainerName psql -U $User -d $Database -c "SELECT 1;" | Out-Null
-        $ready = $true
-    }
-    catch {
-        Start-Sleep -Seconds 2
-    }
-}
-
-if (-not $ready) {
-    throw "PostgreSQL nao ficou pronto a tempo."
-}
-
-Write-Host "Habilitando extensao vector..."
-docker exec $ContainerName psql -U $User -d $Database -c "CREATE EXTENSION IF NOT EXISTS vector;" | Out-Host
-
-Write-Host "Ambiente PostgreSQL com pgvector pronto."
-```
-
-## Fluxo de ingestao
-
-Antes de rodar qualquer comando do projeto:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+Coloque PDFs na pasta `artigos/` e execute:
 
 ### LangChain
-
-Ingestao completa:
 
 ```powershell
 .\.venv\Scripts\python.exe -m rag.langchain.ingest artigos
 ```
 
-Retomar a partir de um chunk especifico:
+Retomar a partir de um chunk específico (útil se interrompeu):
 
 ```powershell
 .\.venv\Scripts\python.exe -m rag.langchain.ingest artigos 400
-```
-
-Ingerir um unico arquivo PDF:
-
-```powershell
-.\.venv\Scripts\python.exe -m rag.langchain.ingest ".\artigos\Exploring the Power of Diffusion Large Language Models for Software Engineering_ An Empirical Investigation.pdf"
 ```
 
 ### LlamaIndex
@@ -240,372 +183,281 @@ Ingerir um unico arquivo PDF:
 .\.venv\Scripts\python.exe -m rag.llamaindex.ingest artigos
 ```
 
-Ingerir um unico arquivo PDF:
+Ingerir um único PDF:
 
 ```powershell
-.\.venv\Scripts\python.exe -m rag.llamaindex.ingest ".\artigos\Exploring the Power of Diffusion Large Language Models for Software Engineering_ An Empirical Investigation.pdf"
+.\.venv\Scripts\python.exe -m rag.langchain.ingest ".\artigos\meu-artigo.pdf"
 ```
 
-## Fluxo de consulta
+---
+
+## 7. Subir a API FastAPI
+
+```powershell
+.\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000
+```
+
+Endpoints disponíveis:
+
+- Swagger UI: `http://localhost:8000/docs`
+- Health check: `GET http://localhost:8000/health`
+- Métricas Prometheus: `GET http://localhost:8000/metrics`
+
+---
+
+## 8. Testar queries via terminal
 
 ### LangChain
 
-Teste de query pelo terminal:
-
 ```powershell
-.\.venv\Scripts\python.exe -m rag.langchain.query "O que e diffusion-based AI content generation?"
-```
-
-Outro exemplo:
-
-```powershell
-.\.venv\Scripts\python.exe -m rag.langchain.query "Resuma os principais temas dos artigos carregados"
+.\.venv\Scripts\python.exe -m rag.langchain.query "O que e RAG e como funciona?"
 ```
 
 ### LlamaIndex
-
-Teste de query pelo terminal:
-
-```powershell
-.\.venv\Scripts\python.exe -m rag.llamaindex.query "O que e diffusion-based AI content generation?"
-```
-
-Outro exemplo:
 
 ```powershell
 .\.venv\Scripts\python.exe -m rag.llamaindex.query "Quais artigos falam sobre diffusion models?"
 ```
 
-## Subir a API
+---
 
-Subir o servidor local:
-
-```powershell
-.\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000
-```
-
-Swagger:
-
-- `http://localhost:8000/docs`
-
-Health check:
-
-- `GET /health`
-
-## Testar a API
-
-### Verificar se a API esta no ar
+## 9. Testar via API (PowerShell)
 
 ```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/health"
-```
-
-### Testar query via API com LangChain
-
-```powershell
+# LangChain
 Invoke-RestMethod -Method Post `
     -Uri "http://localhost:8000/langchain/query" `
     -ContentType "application/json" `
-    -Body '{"question":"O que e diffusion-based AI content generation?","k":4}'
-```
+    -Body '{"question":"O que e diffusion-based AI?","k":4}'
 
-### Testar query via API com LlamaIndex
-
-```powershell
+# LlamaIndex
 Invoke-RestMethod -Method Post `
     -Uri "http://localhost:8000/llamaindex/query" `
     -ContentType "application/json" `
-    -Body '{"question":"O que e diffusion-based AI content generation?","k":4}'
+    -Body '{"question":"O que e diffusion-based AI?","k":4}'
+
+# Listar artigos
+Invoke-RestMethod -Method Get -Uri "http://localhost:8000/sqlalchemy/articles"
+
+# Listar chunks de um artigo
+Invoke-RestMethod -Method Get `
+    -Uri "http://localhost:8000/sqlalchemy/chunks?article=Diffusion&limit=5"
 ```
 
-### Ingerir um arquivo via API com LangChain
+---
+
+## 10. Frontend Next.js
 
 ```powershell
-Invoke-RestMethod -Method Post `
-    -Uri "http://localhost:8000/langchain/ingest" `
-    -Form @{ file = Get-Item ".\artigos\Exploring the Power of Diffusion Large Language Models for Software Engineering_ An Empirical Investigation.pdf" }
+cd frontend
+npm install
+npm run dev
 ```
 
-### Ingerir um arquivo via API com LlamaIndex
+Acesse `http://localhost:3001` (ou 3000 se não estiver ocupada).
+
+### Páginas disponíveis
+
+| Rota | Função |
+|---|---|
+| `/guide` | Guia de conceitos RAG + treinador de perguntas para entrevista |
+| `/chat` | Chat com a base de conhecimento (LangChain ou LlamaIndex) |
+| `/explorer` | Inspetor SQLAlchemy: artigos → chunks → embedding preview |
+
+---
+
+## 11. Observabilidade — como ver os dados
+
+### Fluxo de dados
+
+```
+FastAPI (8000)
+  ├── OTLP HTTP ──▶ OTel Collector (4318) ──▶ Jaeger  (16686)
+  │                                        ──▶ Tempo   (3200) → Grafana
+  ├── /metrics ◀── Prometheus (9090)  → Grafana
+  └── logs/api.log ◀── Promtail → Loki (3100) → Grafana
+```
+
+### UIs
+
+| URL | O que ver |
+|---|---|
+| `http://localhost:3030` | **Grafana** — dashboard unificado (traces + metrics + logs) |
+| `http://localhost:16686` | **Jaeger** — busca de traces por serviço/operação |
+| `http://localhost:9090` | **Prometheus** — explorar métricas com PromQL |
+
+### Ver traces no Jaeger
+
+1. Abra `http://localhost:16686`
+2. Em **Service** selecione `rag-system`
+3. Clique **Find Traces**
+4. Clique em qualquer trace para ver os spans aninhados
+
+Cada requisição `POST /langchain/query` gera uma árvore de spans:
+
+```
+HTTP POST /langchain/query          (FastAPIInstrumentor)
+  └── langchain.rag.query           (span manual — question, k, framework)
+        └── langchain.chain.invoke  (span manual — chunks_retrieved)
+              └── SELECT ...        (SQLAlchemyInstrumentor — query SQL)
+```
+
+### Ver traces no Grafana Tempo
+
+1. Abra `http://localhost:3030`
+2. Vá em **Explore** → selecione datasource **Tempo**
+3. Use **Search** → Service Name: `rag-system`
+4. Clique num trace para ver o flamegraph de spans
+
+Diferencial do Tempo vs Jaeger: ao clicar num span, aparece botão **Logs** que abre os logs do mesmo período no Loki (correlação automática).
+
+### Ver métricas no Prometheus
+
+1. Abra `http://localhost:9090`
+2. Em **Expression** insira uma PromQL:
+
+```promql
+# Taxa de requisições por segundo
+rate(http_requests_total{job="rag-api"}[5m])
+
+# Latência p95 dos endpoints
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+# Quantidade total de queries LangChain
+http_requests_total{handler="/langchain/query"}
+```
+
+### Ver métricas no Grafana
+
+1. Abra `http://localhost:3030`
+2. Vá em **Explore** → selecione datasource **Prometheus**
+3. Cole qualquer PromQL do exemplo acima
+
+Para criar um dashboard:
+
+1. Clique em **+** → **New Dashboard** → **Add visualization**
+2. Selecione **Prometheus** como datasource
+3. Use a PromQL desejada
+
+### Ver logs no Grafana Loki
+
+Os logs do FastAPI são escritos como JSON em `logs/api.log` e coletados pelo Promtail.
+
+1. Abra `http://localhost:3030`
+2. Vá em **Explore** → selecione datasource **Loki**
+3. Use LogQL:
+
+```logql
+# Todos os logs do serviço
+{job="rag-api"}
+
+# Apenas erros
+{job="rag-api"} | json | level="ERROR"
+
+# Logs de um período específico com filtro por texto
+{job="rag-api"} | json | line_format "{{.message}}" |= "query"
+```
+
+### Correlação Logs ↔ Traces
+
+Ao ver um log no Loki que contenha `trace_id`, aparece um botão **Tempo** para abrir o trace correspondente — e vice-versa.
+
+---
+
+## 12. Queries SQL diretas no PostgreSQL
+
+Abrir shell SQL:
 
 ```powershell
-Invoke-RestMethod -Method Post `
-    -Uri "http://localhost:8000/llamaindex/ingest" `
-    -Form @{ file = Get-Item ".\artigos\Exploring the Power of Diffusion Large Language Models for Software Engineering_ An Empirical Investigation.pdf" }
+docker exec -it tabzer-postgres psql -U postgres -d ragsys
 ```
 
-## Consultas com SQLAlchemy
+### Ver artigos ingeridos
 
-O projeto agora tem um modulo dedicado para inspeção via SQLAlchemy em `rag/sqlalchemy_queries.py`.
+```sql
+SELECT DISTINCT cmetadata->>'source' AS fonte, COUNT(*) AS chunks
+FROM langchain_pg_embedding
+GROUP BY fonte
+ORDER BY chunks DESC;
+```
 
-Esse modulo consulta diretamente as tabelas do LangChain:
+### Ver chunks de um artigo
 
-- `langchain_pg_collection`
-- `langchain_pg_embedding`
+```sql
+SELECT
+    id,
+    cmetadata->>'page' AS pagina,
+    LEFT(document, 200) AS trecho
+FROM langchain_pg_embedding
+WHERE cmetadata->>'source' ILIKE '%Diffusion%'
+ORDER BY (cmetadata->>'page')::int, id;
+```
 
-### Usar por codigo Python
+### Busca semântica manual (pgvector)
 
-Exemplo simples no terminal:
+```sql
+-- Os k=4 chunks mais similares a um vetor de consulta (substitua pelo vetor real)
+SELECT id, LEFT(document, 150) AS trecho
+FROM langchain_pg_embedding
+ORDER BY embedding <=> '[0.1, 0.2, ...]'::vector
+LIMIT 4;
+```
+
+### Contagem geral
 
 ```powershell
-.\.venv\Scripts\python.exe -c "from rag.sqlalchemy_queries import list_articles; print(list_articles())"
+docker exec tabzer-postgres psql -U postgres -d ragsys `
+    -c "SELECT COUNT(*) FROM langchain_pg_embedding;"
 ```
 
-Exemplo com mais controle:
+---
 
-```python
-from rag.sqlalchemy_queries import get_chunk_detail, list_articles, list_chunks
-
-articles = list_articles(contains="Diffusion", limit=10)
-print(articles)
-
-chunks = list_chunks(article="Diffusion", limit=5, preview_chars=150, embedding_dims=5)
-print(chunks)
-
-chunk = get_chunk_detail(chunk_id=chunks[0]["id"], embedding_dims=20)
-print(chunk)
-```
-
-### Usar via interface Swagger
-
-Suba a API:
+## 13. Fluxo completo de início do zero
 
 ```powershell
+# 1. Subir infraestrutura
+docker compose up -d
+
+# 2. Baixar modelos Ollama (primeira vez)
+docker exec ragops-ollama ollama pull nomic-embed-text
+docker exec ragops-ollama ollama pull llama3.2
+
+# 3. Ambiente Python
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# 4. Extensão pgvector
+docker exec tabzer-postgres psql -U postgres -d ragsys -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 5. Ingestão
+.\.venv\Scripts\python.exe -m rag.langchain.ingest artigos
+
+# 6. API
 .\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000
+
+# 7. Frontend (outro terminal)
+cd frontend; npm install; npm run dev
 ```
 
-Abra:
-
-- `http://localhost:8000/docs`
-
-Procure pela tag `SQLAlchemy`.
-
-### Endpoints SQLAlchemy disponiveis
-
-#### Listar artigos e quantidade de chunks
-
-`GET /sqlalchemy/articles`
-
-Exemplo no navegador ou Swagger:
-
-- `contains`: filtra parte do nome do artigo
-- `limit`: limita a quantidade de resultados
-
-Exemplo via PowerShell:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/sqlalchemy/articles?contains=Diffusion&limit=20"
-```
-
-#### Listar chunks com preview de texto e embedding
-
-`GET /sqlalchemy/chunks`
-
-Parâmetros úteis:
-
-- `article`: parte do nome do artigo
-- `page`: filtra por página
-- `limit`: quantidade de chunks
-- `preview_chars`: tamanho do preview do texto
-- `embedding_dims`: quantas dimensões do vetor mostrar
-
-Exemplo via PowerShell:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/sqlalchemy/chunks?article=Diffusion&limit=5&preview_chars=120&embedding_dims=6"
-```
-
-#### Ver detalhe de um chunk com vetor
-
-`GET /sqlalchemy/chunks/{chunk_id}`
-
-Primeiro pegue um `id` em `/sqlalchemy/chunks`, depois consulte o detalhe:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://localhost:8000/sqlalchemy/chunks/SEU_CHUNK_ID?embedding_dims=30"
-```
-
-Na interface Swagger, o fluxo mais pratico e:
-
-1. Abrir `GET /sqlalchemy/articles` e executar.
-2. Escolher um nome de artigo.
-3. Abrir `GET /sqlalchemy/chunks` com o filtro `article`.
-4. Copiar um `id` retornado.
-5. Abrir `GET /sqlalchemy/chunks/{chunk_id}` para ver o texto completo e o embedding.
-
-### Fluxo rapido de validacao
-
-1. Ative o ambiente: `\.venv\Scripts\Activate.ps1`
-2. Rode a ingestao: `\.venv\Scripts\python.exe -m rag.langchain.ingest artigos`
-3. Teste uma query no terminal: `\.venv\Scripts\python.exe -m rag.langchain.query "O que e diffusion-based AI content generation?"`
-4. Suba a API: `\.venv\Scripts\uvicorn.exe api.main:app --reload --port 8000`
-5. Teste o endpoint: `Invoke-RestMethod -Method Post -Uri "http://localhost:8000/langchain/query" -ContentType "application/json" -Body '{"question":"O que e diffusion-based AI content generation?","k":4}'`
-
-## Como os vetores ficam salvos no PostgreSQL
-
-### LangChain
-
-O LangChain salva em tabelas do `langchain-postgres`:
-
-- `langchain_pg_collection`
-- `langchain_pg_embedding`
-
-Cada linha de `langchain_pg_embedding` representa um chunk, nao um artigo inteiro.
-
-Campos principais:
-
-- `id`: identificador do chunk
-- `collection_id`: referencia a colecao
-- `document`: texto do chunk
-- `embedding`: vetor do chunk
-- `cmetadata`: metadados em JSON, como arquivo e pagina
-
-### Importante
-
-Nao existe 1 vetor por artigo.
-
-Existe:
-
-- 1 artigo PDF
-- varias paginas
-- varios chunks por pagina
-- 1 vetor para cada chunk
-
-Entao um artigo pode gerar dezenas de linhas em `langchain_pg_embedding`.
-
-## Queries SQL para inspecao
-
-### 1. Ver todos os artigos presentes no banco
-
-```sql
-SELECT DISTINCT cmetadata->>'source' AS source
-FROM langchain_pg_embedding
-ORDER BY source;
-```
-
-### Explicacao
-
-Mostra os nomes reais dos arquivos salvos em `cmetadata->>'source'`. Use isso antes de filtrar por um artigo especifico.
-
-## 2. Contar quantos chunks cada artigo gerou
-
-```sql
-SELECT
-    cmetadata->>'source' AS artigo,
-    COUNT(*) AS total_chunks
-FROM langchain_pg_embedding
-GROUP BY cmetadata->>'source'
-ORDER BY artigo;
-```
-
-### Explicacao
-
-Agrupa os registros por arquivo e conta quantos chunks foram persistidos para cada um.
-
-## 3. Ver o texto de cada chunk de um artigo
-
-```sql
-SELECT
-    id,
-    cmetadata->>'source' AS artigo,
-    cmetadata->>'page' AS pagina,
-    document AS chunk_texto
-FROM langchain_pg_embedding
-WHERE cmetadata->>'source' ILIKE '%Diffusion%'
-ORDER BY (cmetadata->>'page')::int, id;
-```
-
-### Explicacao
-
-Retorna o texto salvo no campo `document` para todos os chunks de um artigo cujo nome contenha `Diffusion`.
-
-## 4. Ver o vetor completo de cada chunk de um artigo
-
-```sql
-SELECT
-    id,
-    cmetadata->>'source' AS artigo,
-    cmetadata->>'page' AS pagina,
-    embedding::text AS vetor_completo
-FROM langchain_pg_embedding
-WHERE cmetadata->>'source' ILIKE '%Diffusion%'
-ORDER BY (cmetadata->>'page')::int, id;
-```
-
-### Explicacao
-
-Converte o campo `embedding` para texto para permitir inspecao manual. O resultado e grande porque cada vetor tem 768 dimensoes.
-
-## 5. Ver texto e vetor juntos
-
-```sql
-SELECT
-    id,
-    cmetadata->>'source' AS artigo,
-    cmetadata->>'page' AS pagina,
-    document AS chunk_texto,
-    embedding::text AS vetor_completo
-FROM langchain_pg_embedding
-WHERE cmetadata->>'source' ILIKE '%Diffusion%'
-ORDER BY (cmetadata->>'page')::int, id;
-```
-
-### Explicacao
-
-Util para inspecionar exatamente qual trecho textual gerou qual embedding.
-
-## 6. Ver uma versao resumida para inspecao visual
-
-```sql
-SELECT
-    id,
-    cmetadata->>'source' AS artigo,
-    cmetadata->>'page' AS pagina,
-    LEFT(document, 200) AS trecho,
-    LEFT(embedding::text, 300) AS vetor_inicio
-FROM langchain_pg_embedding
-WHERE cmetadata->>'source' ILIKE '%Diffusion%'
-LIMIT 10;
-```
-
-### Explicacao
-
-Mostra apenas o inicio do texto e o inicio do vetor. E a melhor forma de inspecionar sem poluir a saida do cliente SQL.
-
-## Observacao sobre o tipo `vector`
-
-O tipo `vector` do pgvector nao se comporta como um array PostgreSQL comum.
-
-Por isso, expressoes como estas podem falhar:
-
-- `embedding[1]`
-- `embedding::float[]`
-
-Para inspecao manual, a abordagem mais simples e:
-
-- `embedding::text`
-- `LEFT(embedding::text, ...)`
-
-## Verificar quantos embeddings existem
-
-```powershell
-docker exec tabzer-postgres psql -U postgres -d ragsys -c "SELECT COUNT(*) FROM langchain_pg_embedding;"
-```
-
-## Situacao atual do projeto
-
-- LangChain usa a colecao `lc_documents`
-- LlamaIndex usa a tabela `llamaindex_documents`
-- Os embeddings atuais usam o modelo `text-embedding-004`
-- A dimensao esperada dos vetores e 768
-
-## Observacao importante sobre os entrypoints
-
-Para o fluxo atual do projeto, prefira os modulos abaixo:
-
-- `python -m rag.langchain.ingest`
-- `python -m rag.langchain.query`
-- `python -m rag.llamaindex.ingest`
-- `python -m rag.llamaindex.query`
-
-O arquivo `rag/query.py` existe, mas nao representa o fluxo principal que esta alinhado com o estado atual da ingestao em LangChain.
+Acessos após o boot:
+
+| URL | Serviço |
+|---|---|
+| http://localhost:8000/docs | FastAPI Swagger |
+| http://localhost:3001 | Frontend Next.js |
+| http://localhost:3030 | Grafana (traces + logs + metrics) |
+| http://localhost:16686 | Jaeger (traces) |
+| http://localhost:9090 | Prometheus (metrics) |
+
+---
+
+## Tabelas criadas automaticamente
+
+| Tabela | Framework | Descrição |
+|---|---|---|
+| `langchain_pg_collection` | LangChain | namespaces de coleções |
+| `langchain_pg_embedding` | LangChain | chunks + embeddings + metadados |
+| `llamaindex_documents` | LlamaIndex | nodes + embeddings |
+
+Cada artigo PDF gera múltiplos chunks. Um chunk = uma linha + um vetor de 768 dimensões.

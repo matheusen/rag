@@ -1,0 +1,49 @@
+# OpenTelemetry Collector — hub central de telemetria
+#
+# Fluxo:
+#   FastAPI app → OTLP HTTP (4318) → Collector → Jaeger  (traces)
+#                                               → Tempo   (traces)
+#   (traces chegam em batch, processados e exportados para os dois backends)
+#
+# CONCEITOS OTEL COLLECTOR:
+#   receivers   : como o dado entra   (aqui: OTLP gRPC + HTTP)
+#   processors  : transforma os dados (aqui: batch para eficiência)
+#   exporters   : para onde vai       (aqui: Jaeger e Tempo via OTLP gRPC)
+#   service     : conecta receivers → processors → exporters em pipelines
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317   # recebe OTLP gRPC da app
+      http:
+        endpoint: 0.0.0.0:4318   # recebe OTLP HTTP da app (usado pela nossa config Python)
+
+processors:
+  batch:
+    timeout: 1s                  # máximo 1s de espera antes de exportar
+    send_batch_size: 512         # máximo 512 spans por lote
+
+exporters:
+  # ── Jaeger (traces) ───────────────────────────────────────────────────────
+  otlp/jaeger:
+    endpoint: jaeger:4317        # Jaeger all-in-one OTLP gRPC interno
+    tls:
+      insecure: true
+
+  # ── Grafana Tempo (traces) ────────────────────────────────────────────────
+  otlp/tempo:
+    endpoint: tempo:4317         # Tempo OTLP gRPC interno
+    tls:
+      insecure: true
+
+  # ── Debug no stdout do collector (útil para troubleshooting) ─────────────
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [batch]
+      exporters:  [otlp/jaeger, otlp/tempo, debug]

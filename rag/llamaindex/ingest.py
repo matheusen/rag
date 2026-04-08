@@ -27,9 +27,9 @@ from llama_index.core import Settings, SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.storage.storage_context import StorageContext
 
-# Integrações com Vertex AI
-from llama_index.embeddings.vertex import VertexTextEmbedding
-from llama_index.llms.vertex import Vertex
+# Integrações com Ollama local
+from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.llms.ollama import Ollama
 
 # Vector store para PostgreSQL + pgvector
 from llama_index.vector_stores.postgres import PGVectorStore
@@ -42,15 +42,13 @@ def configure_settings():
     LlamaIndex usa Settings global em vez de passar llm/embeddings
     para cada classe individualmente (ao contrário do LangChain).
     """
-    Settings.llm = Vertex(
-        model=os.environ["GEMINI_LLM_MODEL"],
-        project=os.environ["GOOGLE_CLOUD_PROJECT"],
-        location=os.environ["GOOGLE_CLOUD_LOCATION"],
+    Settings.llm = Ollama(
+        model=os.environ["OLLAMA_LLM_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
     )
-    Settings.embed_model = VertexTextEmbedding(
-        model_name=os.environ["GEMINI_EMBEDDING_MODEL"],
-        project=os.environ["GOOGLE_CLOUD_PROJECT"],
-        location=os.environ["GOOGLE_CLOUD_LOCATION"],
+    Settings.embed_model = OllamaEmbedding(
+        model_name=os.environ["OLLAMA_EMBEDDING_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
     )
     Settings.chunk_size = 1000
     Settings.chunk_overlap = 150

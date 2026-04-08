@@ -1,0 +1,73 @@
+# Grafana — Data Sources provisioning
+#
+# Este arquivo configura automaticamente as 4 fontes de dados do Grafana.
+# Ao iniciar, o Grafana lê /etc/grafana/provisioning/datasources/ e aplica.
+# Não precisa configurar manualmente pela UI.
+#
+# Correlation Tempo → Loki:
+#   No Grafana, ao visualizar um trace no Tempo, você pode clicar num span
+#   e ir direto para os logs do Loki do mesmo período — isso é a correlação.
+#   Configurada via tracesToLogs.datasourceUid apontando para o UID do Loki.
+
+apiVersion: 1
+
+datasources:
+  # ── Prometheus (métricas) ─────────────────────────────────────────────────
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus-uid
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      exemplarTraceIdDestinations:
+        # Liga exemplars do Prometheus para traces do Tempo
+        - name: trace_id
+          datasourceUid: tempo-uid
+
+  # ── Grafana Tempo (traces) ─────────────────────────────────────────────────
+  - name: Tempo
+    type: tempo
+    uid: tempo-uid
+    url: http://tempo:3200
+    access: proxy
+    jsonData:
+      httpMethod: GET
+      # Correlação Traces → Logs: ao abrir um trace, abre logs do mesmo período
+      tracesToLogs:
+        datasourceUid: loki-uid
+        tags: [service, level]
+        mapTagNamesEnabled: true
+        mappedTags:
+          - key: service.name
+            value: service
+        filterByTraceID: true
+        filterBySpanID: false
+      # Correlação Traces → Metrics: liga traces a métricas Prometheus
+      tracesToMetrics:
+        datasourceUid: prometheus-uid
+        tags:
+          - key: service.name
+            value: service
+        queries:
+          - name: Request rate
+            query: rate(http_server_request_duration_seconds_count{$__tags}[5m])
+      serviceMap:
+        datasourceUid: prometheus-uid
+      nodeGraph:
+        enabled: true
+
+  # ── Grafana Loki (logs) ──────────────────────────────────────────────────
+  - name: Loki
+    type: loki
+    uid: loki-uid
+    url: http://loki:3100
+    access: proxy
+    jsonData:
+      # Correlação Logs → Traces: ao ver um log com traceID, abre no Tempo
+      derivedFields:
+        - matcherRegex: '"trace_id":"(\w+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+          datasourceUid: tempo-uid
