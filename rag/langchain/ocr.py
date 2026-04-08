@@ -306,15 +306,22 @@ def extract_ocr_assets(file_path: str, source_key: str) -> list[OCRAsset]:
 
     max_assets = int(os.environ.get("RAG_OCR_MAX_ASSETS_PER_DOCUMENT", "32"))
     extracted: list[OCRAsset] = []
+    disabled_backends: set[str] = set()
 
     for asset in visual_assets[:max_assets]:
-        for backend in backends:
+        active_backends = [backend for backend in backends if getattr(backend, "name", "unknown") not in disabled_backends]
+        if not active_backends:
+            break
+
+        for backend in active_backends:
             try:
                 parsed = backend.parse(asset)
             except Exception as exc:
+                backend_name = getattr(backend, "name", "unknown")
+                disabled_backends.add(backend_name)
                 LOGGER.warning(
-                    "Falha no backend OCR",
-                    extra={"backend": getattr(backend, "name", "unknown"), "asset": asset.asset_name, "error": str(exc)},
+                    "Falha no backend OCR; backend sera desabilitado para o restante desta ingestao.",
+                    extra={"backend": backend_name, "asset": asset.asset_name, "error": str(exc)},
                 )
                 continue
 
