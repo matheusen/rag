@@ -4,11 +4,14 @@ import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, TypeVar
+
+_T = TypeVar("_T")
 
 import psycopg
 from dotenv import load_dotenv
@@ -135,6 +138,30 @@ def _hash_file_bytes(file_path: str) -> str:
     return hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
 
 
+def _ollama_retry(fn: Callable[[], _T], *, retries: int = 5, base_delay: float = 8.0) -> _T:
+    """Retry an Ollama call on transient connection errors (model-swap disconnects)."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as exc:
+            msg = str(exc).lower()
+            transient = any(kw in msg for kw in (
+                "server disconnected",
+                "connection",
+                "remoteprot",
+                "connection reset",
+                "connection abort",
+                "connection refused",
+                "eoferror",
+            ))
+            if not transient or attempt == retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            print(f"  [retry {attempt + 1}/{retries}] Ollama desconectou, aguardando {delay:.0f}s...", flush=True)
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
 def _embedder() -> OllamaEmbeddings:
     return OllamaEmbeddings(
         model=os.environ["OLLAMA_EMBEDDING_MODEL"],
@@ -147,6 +174,15 @@ def _llm() -> ChatOllama:
         model=os.environ["OLLAMA_LLM_MODEL"],
         base_url=os.environ["OLLAMA_BASE_URL"],
         temperature=0,
+    )
+
+
+def _summary_llm() -> ChatOllama:
+    return ChatOllama(
+        model=os.environ["OLLAMA_LLM_MODEL"],
+        base_url=os.environ["OLLAMA_BASE_URL"],
+        temperature=0,
+        num_predict=300,
     )
 
 
@@ -382,7 +418,7 @@ def _summarize_document(source_key: str, text: str) -> str:
     )
 
     try:
-        return _message_text(_llm().invoke(prompt)) or _fallback_summary(source_key, text)
+        return _message_text(_summary_llm().invoke(prompt)) or _fallback_summary(source_key, text)
     except Exception:
         return _fallback_summary(source_key, text)
 
@@ -473,17 +509,49 @@ def _insert_chunks(
         )
 
 
-def _insert_image_assets(
-    cur: psycopg.Cursor,
-    *,
+def _prepare_ocr_batches(
     ocr_assets: list[OCRAsset],
     embedder: OllamaEmbeddings,
     splitter: RecursiveCharacterTextSplitter,
+) -> list[tuple[OCRAsset, list, list[list[float]]]]:
+    """Pré-computa chunks e embeddings OCR fora de qualquer conexão DB."""
+    result: list[tuple[OCRAsset, list, list[list[float]]]] = []
+    for asset in ocr_assets:
+        asset_documents = splitter.create_documents(
+            [_sanitize(asset.text)],
+            metadatas=[
+                {
+                    "source": asset.source_key,
+                    "page": asset.page_number,
+                    "asset_name": asset.asset_name,
+                    "asset_kind": asset.asset_kind,
+                    "ocr_engine": asset.ocr_engine,
+                }
+            ],
+        )
+        if not asset_documents:
+            result.append((asset, [], []))
+            continue
+        all_embeddings: list[list[float]] = []
+        batch_size = 24
+        for batch_start in range(0, len(asset_documents), batch_size):
+            batch = asset_documents[batch_start:batch_start + batch_size]
+            batch_texts = [_sanitize(doc.page_content) for doc in batch]
+            embeddings_list = _ollama_retry(lambda bt=batch_texts: embedder.embed_documents(bt))
+            all_embeddings.extend(embeddings_list)
+        result.append((asset, asset_documents, all_embeddings))
+    return result
+
+
+def _insert_image_assets(
+    cur: psycopg.Cursor,
+    *,
+    ocr_batches: list[tuple[OCRAsset, list, list[list[float]]]],
 ) -> tuple[int, int]:
     total_assets = 0
     total_chunks = 0
 
-    for asset_index, asset in enumerate(ocr_assets, start=1):
+    for asset_index, (asset, asset_documents, all_embeddings) in enumerate(ocr_batches, start=1):
         asset_id = str(uuid.uuid4())
         asset_metadata = {
             key: _sanitize(value) if isinstance(value, str) else value
@@ -536,65 +604,47 @@ def _insert_image_assets(
             ),
         )
 
-        asset_documents = splitter.create_documents(
-            [_sanitize(asset.text)],
-            metadatas=[
-                {
-                    "source": asset.source_key,
-                    "page": asset.page_number,
-                    "asset_name": asset.asset_name,
-                    "asset_kind": asset.asset_kind,
-                    "ocr_engine": asset.ocr_engine,
-                }
-            ],
-        )
         if not asset_documents:
             total_assets += 1
             continue
 
-        batch_size = 24
-        for batch_start in range(0, len(asset_documents), batch_size):
-            batch = asset_documents[batch_start:batch_start + batch_size]
-            batch_texts = [_sanitize(document.page_content) for document in batch]
-            embeddings_list = embedder.embed_documents(batch_texts)
-
-            for chunk_offset, (document, embedding) in enumerate(zip(batch, embeddings_list), start=batch_start):
-                chunk_metadata = {
-                    key: _sanitize(value) if isinstance(value, str) else value
-                    for key, value in (document.metadata or {}).items()
-                }
-                cur.execute(
-                    f"""
-                    INSERT INTO {IMAGE_EMBEDDING_TABLE} (
-                        chunk_id,
-                        asset_id,
-                        source_key,
-                        page_number,
-                        asset_name,
-                        asset_kind,
-                        chunk_index,
-                        ocr_engine,
-                        content,
-                        embedding,
-                        metadata
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        asset_id,
-                        asset.source_key,
-                        asset.page_number,
-                        asset.asset_name,
-                        asset.asset_kind,
-                        chunk_offset,
-                        asset.ocr_engine,
-                        _sanitize(document.page_content),
-                        str(embedding),
-                        json.dumps(chunk_metadata),
-                    ),
+        for chunk_offset, (document, embedding) in enumerate(zip(asset_documents, all_embeddings)):
+            chunk_metadata = {
+                key: _sanitize(value) if isinstance(value, str) else value
+                for key, value in (document.metadata or {}).items()
+            }
+            cur.execute(
+                f"""
+                INSERT INTO {IMAGE_EMBEDDING_TABLE} (
+                    chunk_id,
+                    asset_id,
+                    source_key,
+                    page_number,
+                    asset_name,
+                    asset_kind,
+                    chunk_index,
+                    ocr_engine,
+                    content,
+                    embedding,
+                    metadata
                 )
-                total_chunks += 1
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    asset.source_key,
+                    asset.page_number,
+                    asset.asset_name,
+                    asset.asset_kind,
+                    chunk_offset,
+                    asset.ocr_engine,
+                    _sanitize(document.page_content),
+                    str(embedding),
+                    json.dumps(chunk_metadata),
+                ),
+            )
+            total_chunks += 1
 
         total_assets += 1
 
@@ -656,6 +706,7 @@ def ingest_path(
     *,
     source_override: str | None = None,
     reset: bool = False,
+    fast: bool = False,
 ) -> list[DocumentIngestResult]:
     ensure_supporting_schema()
 
@@ -665,64 +716,89 @@ def ingest_path(
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     results: list[DocumentIngestResult] = []
 
+    # Resolve collection_id in a short connection before the per-file loop
     with psycopg.connect(_dsn()) as conn:
         with conn.cursor() as cur:
             collection_id = _ensure_collection(cur)
+        conn.commit()
 
-            for file_path in files:
-                source_key = _normalize_source(str(file_path), root=root, source_override=source_override)
+    total_files = len(files)
+    for file_index, file_path in enumerate(files, 1):
+        print(f"[{file_index}/{total_files}] {file_path.name}", flush=True)
+        source_key = _normalize_source(str(file_path), root=root, source_override=source_override)
+        content_hash = _hash_file_bytes(str(file_path))
+
+        # Check skip with its own short connection
+        with psycopg.connect(_dsn()) as conn:
+            with conn.cursor() as cur:
                 existing = _existing_document(cur, source_key)
-                content_hash = _hash_file_bytes(str(file_path))
 
-                if existing and existing["content_hash"] == content_hash and not reset:
-                    results.append(
-                        DocumentIngestResult(
-                            source=source_key,
-                            filename=file_path.name,
-                            status="skipped",
-                            chunks_written=0,
-                            page_count=existing["page_count"],
-                            summary_updated=False,
-                        )
-                    )
-                    continue
+        if existing and existing["content_hash"] == content_hash and not reset:
+            print(f"  -> sem alterações (skipped)", flush=True)
+            results.append(
+                DocumentIngestResult(
+                    source=source_key,
+                    filename=file_path.name,
+                    status="skipped",
+                    chunks_written=0,
+                    page_count=existing["page_count"],
+                    summary_updated=False,
+                )
+            )
+            continue
 
-                documents = _load_documents(str(file_path), source_key)
-                full_text = _document_text(documents)
-                ocr_assets = extract_ocr_assets(str(file_path), source_key)
-                ocr_text = "\n\n".join(asset.text for asset in ocr_assets if asset.text.strip())
-                combined_text = "\n\n".join(part for part in [full_text, ocr_text] if part).strip()
+        # Heavy work (load, OCR, embed, summarize) done outside any DB connection
+        documents = _load_documents(str(file_path), source_key)
+        full_text = _document_text(documents)
+        ocr_assets = extract_ocr_assets(str(file_path), source_key)
+        ocr_text = "\n\n".join(asset.text for asset in ocr_assets if asset.text.strip())
+        combined_text = "\n\n".join(part for part in [full_text, ocr_text] if part).strip()
 
+        chunks = splitter.split_documents(documents)
+        for chunk in chunks:
+            chunk.metadata = dict(chunk.metadata or {})
+            chunk.metadata["source"] = source_key
+            chunk.metadata.setdefault("page", 1)
+
+        batch_size = 50
+        total_written = 0
+        all_batches: list[tuple[list, list]] = []
+        for index in range(0, len(chunks), batch_size):
+            batch = chunks[index:index + batch_size]
+            batch_texts = [_sanitize(chunk.page_content) for chunk in batch]
+            print(f"  -> embeddings {index + 1}-{index + len(batch)}/{len(chunks)}", flush=True)
+            embeddings_list = _ollama_retry(lambda bt=batch_texts: embedder.embed_documents(bt))
+            all_batches.append((batch, embeddings_list))
+            total_written += len(batch)
+
+        if fast:
+            print(f"  -> resumo rápido (--fast)", flush=True)
+            summary = _fallback_summary(source_key, combined_text)
+        else:
+            print(f"  -> resumindo...", flush=True)
+            summary = _summarize_document(source_key, combined_text)
+        summary_embedding = _ollama_retry(lambda s=summary: embedder.embed_query(s))
+
+        page_count = len(documents)
+        if page_count == 0:
+            pages = [asset.page_number for asset in ocr_assets if asset.page_number is not None]
+            page_count = max(pages) if pages else 0
+
+        # Pre-compute OCR embeddings OUTSIDE DB connection (avoids idle-in-transaction)
+        ocr_batches = _prepare_ocr_batches(ocr_assets, embedder, splitter)
+
+        # Write everything in one short-lived connection per file
+        with psycopg.connect(_dsn()) as conn:
+            with conn.cursor() as cur:
                 _delete_source_chunks(cur, source_key)
                 _delete_source_image_assets(cur, source_key)
-                chunks = splitter.split_documents(documents)
-                for chunk in chunks:
-                    chunk.metadata = dict(chunk.metadata or {})
-                    chunk.metadata["source"] = source_key
-                    chunk.metadata.setdefault("page", 1)
-
-                batch_size = 50
-                total_written = 0
-                for index in range(0, len(chunks), batch_size):
-                    batch = chunks[index:index + batch_size]
-                    batch_texts = [_sanitize(chunk.page_content) for chunk in batch]
-                    embeddings_list = embedder.embed_documents(batch_texts)
+                for batch, embeddings_list in all_batches:
                     _insert_chunks(cur, collection_id, batch, embeddings_list)
-                    total_written += len(batch)
 
                 image_assets_written, ocr_chunks_written = _insert_image_assets(
                     cur,
-                    ocr_assets=ocr_assets,
-                    embedder=embedder,
-                    splitter=splitter,
+                    ocr_batches=ocr_batches,
                 )
-
-                summary = _summarize_document(source_key, combined_text)
-                summary_embedding = embedder.embed_query(summary)
-                page_count = len(documents)
-                if page_count == 0:
-                    pages = [asset.page_number for asset in ocr_assets if asset.page_number is not None]
-                    page_count = max(pages) if pages else 0
                 _upsert_document_registry(
                     cur,
                     source_key=source_key,
@@ -740,21 +816,21 @@ def ingest_path(
                         "ocr_chunks": ocr_chunks_written,
                     },
                 )
+            conn.commit()
 
-                results.append(
-                    DocumentIngestResult(
-                        source=source_key,
-                        filename=file_path.name,
-                        status="updated" if existing else "ingested",
-                        chunks_written=total_written,
-                        page_count=page_count,
-                        summary_updated=True,
-                        image_assets=image_assets_written,
-                        ocr_chunks_written=ocr_chunks_written,
-                    )
-                )
-
-        conn.commit()
+        print(f"  -> ok ({total_written} chunks)", flush=True)
+        results.append(
+            DocumentIngestResult(
+                source=source_key,
+                filename=file_path.name,
+                status="updated" if existing else "ingested",
+                chunks_written=total_written,
+                page_count=page_count,
+                summary_updated=True,
+                image_assets=image_assets_written,
+                ocr_chunks_written=ocr_chunks_written,
+            )
+        )
 
     return results
 
@@ -799,7 +875,7 @@ def backfill_document_registry() -> int:
             for source_key, items in grouped.items():
                 preview_text = "\n\n".join(text for _, text in items[:SUMMARY_BACKFILL_CHUNKS])
                 summary = _fallback_summary(source_key, preview_text)
-                summary_embedding = embedder.embed_query(summary)
+                summary_embedding = _ollama_retry(lambda s=summary: embedder.embed_query(s))
                 pages = [page for page, _ in items if page is not None]
                 _upsert_document_registry(
                     cur,

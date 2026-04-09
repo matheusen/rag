@@ -90,6 +90,32 @@ Adiciona etapas antes e depois da busca:
 | Na busca | **Hybrid Search** | Combina busca vetorial (semântica) + BM25 (palavras exatas) |
 | Depois da busca | **Reranking** | Cross-encoder reordena os candidatos (mais lento, muito mais preciso) |
 
+### Conversational RAG (com memória)
+
+- Resolve a "cegueira contextual" do RAG padrão: se o usuário perguntar "Quanto custa?", o sistema precisa saber a que "isso" se refere.
+- Adiciona uma **camada de memória com estado** que armazena as últimas 5–10 interações da conversa.
+- Antes de buscar, um LLM reescreve a query usando o histórico — transforma "Você pode redefini-la?" em "Você pode redefinir minha chave de API?".
+- Indispensável para chatbots e assistentes com conversa multi-turno.
+- **Risco:** desvio de memória — contexto antigo pode contaminar a busca atual.
+
+### Corrective RAG — CRAG (autoverificação)
+
+- Introduz um **"Portão de Decisão"** que avalia a qualidade dos documentos recuperados *antes* de enviá-los ao gerador.
+- Score por documento: **Correto** → prossegue | **Ambíguo** → filtra | **Incorreto** → descarta e aciona fallback na web (ex: Tavily, Google Search API).
+- Indicado para domínios de alto risco: financeiro, médico, jurídico.
+- **Custo:** acrescenta 2–4 segundos de latência quando o fallback é acionado.
+
+> **Exemplo:** chatbot financeiro perguntado sobre o preço de uma ação não indexada — CRAG percebe a ausência e busca o preço em tempo real via API externa, sem alucinar.
+
+### Adaptive RAG (roteamento por complexidade)
+
+- Usa um **classificador de intenção** para escolher o caminho mais eficiente:
+  - **Caminho A (sem busca):** saudações ou conhecimento geral → LLM responde direto.
+  - **Caminho B (RAG simples):** perguntas factuais diretas → busca única.
+  - **Caminho C (multi-step agêntico):** perguntas analíticas complexas → pipeline completo.
+- Reduz custo significativamente: 80% das queries vão para os caminhos A ou B.
+- **Risco:** classificador mal calibrado categoriza perguntas difíceis como fáceis.
+
 ### Agentic RAG (mais sofisticado)
 - O LLM age como um **agente com ferramentas de busca**.
 - Decide **quando buscar**, **o que buscar** e **quantas rodadas** são necessárias.
@@ -129,6 +155,17 @@ Adiciona etapas antes e depois da busca:
 - Supervisão nos **passos intermediários**, não só na resposta final.
 - *"Ensina como raciocinar, não apenas o que responder."*
 - **Resultado: +24% em generalização out-of-distribution.**
+
+### GEPA + DSPy — Otimização Automática de Prompts
+
+- **DSPy** trata o LLM como um "dispositivo programável": você declara *o que* entra e sai (Language Signatures), não *como* escrever o prompt. O framework compila e otimiza os prompts automaticamente.
+- **GEPA (Genetic-Pareto Prompt Optimizer):** em vez de escrever prompts manualmente ou usar RL com recompensa escalar simples, o sistema usa **algoritmos genéticos** para evoluir os prompts ao longo do tempo.
+  - Combina prompts bons para gerar prompts melhores (crossover genético).
+  - Mantém múltiplos prompts eficazes via **Pareto optimization** — não apenas um vencedor.
+  - Aprende com os próprios erros lendo feedback textual, como um mentor que analisa tentativas anteriores e propõe correções.
+  - Constrói uma **árvore de evolução de prompts**: cada melhoria cresce como um ramo, acumulando ganhos progressivos.
+- **Resultado empírico:** 35× mais eficiente que MIPROv2, prompts 9× menores com 10% mais performance.
+- **Posição no stack:** alternativa ao Prompt Engineering manual — escala automaticamente com dados de avaliação, sem retreinar o modelo.
 
 ---
 
@@ -214,18 +251,49 @@ São menos de ~50 documentos curtos?
     └── NÃO → RAG (escala e custo)
 ```
 
-### RAG vs. Fine-tuning vs. Prompt Engineering
+### RAG vs. Fine-tuning vs. Prompt Engineering vs. DSPy/GEPA
 
-| Critério | Prompt Eng. | RAG | Fine-tuning |
-|----------|-------------|-----|-------------|
-| Conhecimento atualizado | ✗ | ✓ | ✗ (congelado) |
-| Custo de setup | Baixo | Médio | Alto |
-| Custo de inferência | Baixo | Médio | Baixo |
-| Citação de fontes | ✗ | ✓ | ✗ |
-| Privacidade de dados | Média | Alta | Média |
-| Velocidade de atualização | Imediata | Imediata | Dias/semanas |
+| Critério | Prompt Eng. | DSPy/GEPA | RAG | Fine-tuning |
+| -------- | ----------- | --------- | --- | ----------- |
+| Conhecimento atualizado | ✗ | ✗ | ✓ | ✗ (congelado) |
+| Custo de setup | Baixo | Baixo–Médio | Médio | Alto |
+| Custo de inferência | Baixo | Baixo | Médio | Baixo |
+| Citação de fontes | ✗ | ✗ | ✓ | ✗ |
+| Privacidade de dados | Média | Média | Alta | Média |
+| Velocidade de atualização | Imediata | Imediata | Imediata | Dias/semanas |
+| Otimização automática de prompts | ✗ | ✓ | ✗ | ✗ |
+| Requer dados de avaliação | ✗ | ✓ (poucos) | ✗ | ✓ (muitos) |
 
-**Regra prática:** comece com Prompt Engineering → adicione RAG quando precisar de dados externos/privados → adicione Fine-tuning quando precisar mudar o comportamento do modelo.
+**Regra prática:** comece com Prompt Engineering → adicione DSPy/GEPA se quiser otimizar prompts automaticamente sem retreinar → adicione RAG quando precisar de dados externos/privados → adicione Fine-tuning quando precisar mudar o comportamento estrutural do modelo.
+
+### Framework de Decisão — Qual Arquitetura RAG Usar (5 passos)
+
+**Passo 1 — Comece com Standard RAG.** Sem evidência de que não vai funcionar, comece aqui. Dominar chunking, embedding e avaliação antes de adicionar complexidade.
+
+**Passo 2 — Adicione memória *só* se necessário.** Usuários fazem perguntas de acompanhamento? → RAG Conversacional. Caso contrário, ignore.
+
+**Passo 3 — Adeque ao perfil real das queries:**
+
+| Perfil da query | Arquitetura recomendada |
+| --------------- | ----------------------- |
+| Simples e diretas | Standard RAG |
+| Complexidade muito variável | Adaptive RAG |
+| Alto risco, precisão crítica | Corrective RAG (CRAG) |
+| Pesquisa aberta, multi-hop | Agentic RAG |
+| Terminologia ambígua do usuário | Fusion RAG |
+| Relações entre entidades | GraphRAG |
+
+**Passo 4 — Considere restrições:**
+
+- Orçamento apertado → Standard RAG + otimize o retrieval. Evite Self-RAG e Agentic RAG.
+- Velocidade crítica → Standard ou Adaptive. Evite CRAG com fallback externo.
+- Precisão máxima → CRAG ou GraphRAG, independentemente do custo.
+
+**Passo 5 — Combine arquiteturas.** Em produção, as melhores implementações combinam:
+
+- **Standard + CRAG:** 95% das queries rápidas, 5% verificadas com fallback.
+- **Adaptive + GraphRAG:** queries simples usam vetores, complexas usam grafo.
+- **Fusion + Conversacional:** variações de query com memória de sessão.
 
 ---
 
@@ -362,14 +430,16 @@ Avaliação humana                   → decisões de arquitetura e roadmap
 
 ---
 
-## Resumo Final — Os 5 Pontos Que Ficam
+## Resumo Final — Os 7 Pontos Que Ficam
 
 1. **RAG não é opcional para dados privados** — o LLM não foi treinado no seu sistema.
 2. **Qualidade do retrieval determina a qualidade da resposta** — garbage in, garbage out.
 3. **Busca híbrida (vetorial + BM25) deve ser o padrão**, não a exceção.
 4. **Long context não substitui RAG** — 1.750× mais caro e com problemas de latência, privacidade e escala.
-5. **Agentic RAG é o futuro** — sistemas que aprendem quando e como buscar superam pipelines estáticos em +24%.
+5. **Não existe uma única arquitetura RAG** — Conversacional, CRAG, Adaptive, Agentic e GraphRAG resolvem problemas diferentes; escolher a errada custa meses.
+6. **Comece simples, aumente complexidade só com evidência** — Standard RAG primeiro; adicione camadas quando medir que são necessárias.
+7. **Prompt Engineering pode ser automatizado** — DSPy/GEPA evolui prompts como código, 35× mais eficiente que otimização manual, sem retreinar o modelo.
 
 ---
 
-*Baseado em análise de 43 artigos científicos (2023–2025) — REFRAG (Meta), RAG-Gym (UVA/NIH), FAIR-RAG (Sharif), RAG-Star (Renmin University), IBM Blended RAG, e outros.*
+*Baseado em análise de 43+ artigos científicos (2023–2025) e artigos de referência — REFRAG (Meta), RAG-Gym (UVA/NIH), FAIR-RAG (Sharif), RAG-Star (Renmin University), IBM Blended RAG, DSPy/GEPA (Stanford/CMU), e outros.*

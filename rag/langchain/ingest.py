@@ -5,9 +5,9 @@ import sys
 from rag.langchain.advanced import ingest_path
 
 
-def ingest(path: str, reset: bool = False, source_override: str | None = None):
+def ingest(path: str, reset: bool = False, source_override: str | None = None, fast: bool = False):
     print(f"[LangChain] Carregando: {path}")
-    results = ingest_path(path, reset=reset, source_override=source_override)
+    results = ingest_path(path, reset=reset, source_override=source_override, fast=fast)
 
     for result in results:
         print(
@@ -24,7 +24,7 @@ def ingest(path: str, reset: bool = False, source_override: str | None = None):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Uso: python -m rag.langchain.ingest <arquivo_ou_pasta> [--reset]")
+        print("Uso: python -m rag.langchain.ingest <arquivo_ou_pasta> [--reset] [--fast]")
         sys.exit(1)
 
-    ingest(sys.argv[1], reset="--reset" in sys.argv[2:])
+    ingest(sys.argv[1], reset="--reset" in sys.argv[2:], fast="--fast" in sys.argv[2:])

@@ -23,6 +23,8 @@
 16. [Padrão Map-Reduce — Analisar Tudo com Baixo Custo](#16-padrão-map-reduce--analisar-tudo-com-baixo-custo)
 17. [O Futuro do RAG](#17-o-futuro-do-rag)
 18. [Cenário Escolhido Neste Projeto](#18-cenário-escolhido-neste-projeto)
+19. [Context Engineering para Agentes RAG](#19-context-engineering-para-agentes-rag)
+20. [Caso de Uso — Validação de Cards Jira (Core Banking)](#20-caso-de-uso--validação-de-cards-jira-core-banking)
 
 ---
 
@@ -98,6 +100,8 @@ Um LLM tem dois tipos de "memória":
 **Memória Contextual** — o que está no prompt atual (o "contexto"). O modelo processa o texto que você enviou nesta chamada. Temporária, esquecida após a chamada.
 
 RAG funciona adicionando conhecimento à **memória contextual** — sem alterar a memória paramétrica.
+
+> *Andrej Karpathy resume isso com uma analogia precisa: o LLM é como uma CPU, e a context window é como a RAM — a memória de trabalho ativa. Assim como um sistema operacional decide o que entra na RAM a cada ciclo, a engenharia de contexto decide o que entra na context window a cada passo do agente.*
 
 ### 3.2 Como o LLM gera texto
 
@@ -1440,6 +1444,257 @@ O cenário escolhido neste projeto foi **Advanced RAG híbrido, hierárquico e c
 
 ---
 
+## 19. Context Engineering para Agentes RAG
+
+RAG é uma técnica poderosa. Mas quando colocado em produção dentro de um sistema com agentes, o problema se amplia: o desafio não é mais só "recuperar o documento certo" — é decidir o que vai para o contexto do modelo em cada passo, em que forma, com que granularidade, e protegido de que tipos de ruído.
+
+Esse problema tem nome: **engenharia de contexto**.
+
+A Cognition (empresa por trás do Devin) descreve a engenharia de contexto como a principal responsabilidade dos engenheiros que constroem agentes de IA. Não é exagero: um agente com retrieval excelente e contexto mal construído ainda falha. A qualidade do contexto é o gargalo.
+
+### Os 4 Movimentos de Contexto
+
+Todo sistema que usa LLM faz essas quatro operações — consciente ou não:
+
+#### Write — Escrever contexto fora da janela atual
+
+Armazenar informação que vai ser útil depois, mas não precisa estar no contexto agora.
+
+- Scratchpads de execução (resultados intermediários entre agentes)
+- Memória persistente (histórico de decisões, preferências, padrões)
+- Fatos extraídos de etapas anteriores
+- Logs resumidos de execução anterior
+
+**Exemplo:** um agente que analisa uma issue de bug escreve num scratchpad `"campos ausentes: critérios de aceite, ambiente de simulação"` antes de chamar o próximo agente. O segundo agente lê esse scratchpad em vez de reprocessar a issue inteira.
+
+---
+
+#### Select — Selecionar o que entra no contexto agora
+
+Esta é a operação central do RAG. A pergunta é: dos recursos disponíveis, o que precisa estar no contexto desta chamada específica?
+
+- RAG clássico (busca por similaridade semântica)
+- Busca híbrida (vetorial + BM25)
+- Retrieval por metadados (filtrar por data, fonte, tipo, versão)
+- Recuperação de ferramentas (qual ferramenta usar para este tipo de tarefa?)
+- Recuperação de exemplos (execuções anteriores similares)
+
+**Insight relevante:** RAG aplicado à seleção de ferramentas (*tool retrieval*) melhora a precisão de seleção em **3×** comparado a listar todas as ferramentas disponíveis no prompt. Com 20+ ferramentas, selecionar o subconjunto relevante muda o comportamento do sistema de forma mensurável.
+
+---
+
+#### Compress — Comprimir contexto para reduzir ruído e custo
+
+Nem todo contexto recuperado precisa entrar inteiro no prompt. Comprimir reduz custo, latência e — criticamente — reduz os modos de falha por excesso de informação.
+
+- Sumarização de documentos longos antes de incluir no prompt
+- Pruning: remover sentenças irrelevantes de chunks antes de enviar ao LLM
+- Reranking: reordenar e manter apenas os mais relevantes
+- Deduplicação: remover chunks redundantes que repetem o mesmo fato
+- OCR de imagens e extração de campos de CSVs/logs
+
+**Conexão com a seção 16:** o padrão Map-Reduce é precisamente isso — a ingestão gera resumos baratos (Compress) e a consulta seleciona os documentos críticos com base nesses resumos (Select).
+
+---
+
+#### Isolate — Isolar contexto entre tarefas e agentes
+
+Em sistemas multi-agente, cada agente deve ter seu próprio contexto — focado na sua sub-tarefa. Misturar contexto de tarefas diferentes causa interferência e degradação de qualidade.
+
+- Multi-agente: cada subagente tem sua própria janela de contexto
+- State objects: estado da execução isolado por tarefa
+- Isolamento por domínio: o agente de checklist não vê o contexto interno do agente de coerência
+- Sandbox por ferramenta: o que a ferramenta viu não contamina o contexto principal
+
+**Por que isso importa:** a Cognition observa que a mesma tarefa executada com subagentes e contextos isolados tem desempenho superior a um único agente com contexto grande. Cada subagente recebe apenas o que é relevante para a sua sub-tarefa — menos ruído, menos conflito, menos custo.
+
+---
+
+### Os 3 Tipos de Memória
+
+Sistemas com LLM manipulam três tipos de memória, análogos à psicologia cognitiva:
+
+| Tipo | O que é | Exemplo em RAG aplicado |
+|---|---|---|
+| **Episódica** | Exemplos de execuções passadas | Bugs similares já resolvidos; few-shot de validações anteriores |
+| **Procedural** | Instruções de como executar uma tarefa | Definition of Ready; regras de validação de issues; runbooks |
+| **Semântica** | Fatos e conhecimento sobre o domínio | Documentação técnica; manuais de sistema; normas regulatórias |
+
+Em produção, um sistema completo usa os três: instrui com memória procedural (o *que* fazer), exemplifica com memória episódica (como *foi feito antes* em situação similar) e fundamenta com memória semântica (o que é *verdadeiro* sobre o domínio).
+
+---
+
+### Os 4 Modos de Falha de Contexto
+
+Os problemas mais comuns em sistemas com LLM em produção não vêm do modelo — vêm do contexto que chega até ele.
+
+| Modo de falha | O que acontece | Como evitar |
+|---|---|---|
+| **Context Poisoning** | Informação errada entra no contexto e o modelo a usa como verdade | Validar fontes antes de incluir; metadados de data e versão; rastreabilidade |
+| **Context Distraction** | Contexto relevante é soterrado por contexto irrelevante | Reranking agressivo; limitar número de chunks; Compress antes de Select |
+| **Context Confusion** | Contexto supérfluo muda a resposta sem ser pedido | Construção disciplinada do prompt; chunk size adequado; filtro por relevância |
+| **Context Clash** | Partes do contexto se contradizem e o modelo não sabe qual seguir | Deduplicação; chunking por fonte isolada; versionar documentos e filtrar pela versão atual |
+
+**Exemplo concreto:** um log de exceção de 2022 que contém os mesmos termos de uma issue de 2026 pode ser recuperado por similaridade de texto e envenenar a análise (Context Poisoning). A solução começa na ingestão — metadados de data, filtro por `issue_id`, rastreabilidade de fonte em cada chunk.
+
+---
+
+### Onde RAG se Encaixa no Frame
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     CONTEXTO DO LLM                         │
+│                                                             │
+│   [Instrução / regras]   [Conhecimento]   [Ferramentas]     │
+│          │                     │                │           │
+│    Memória procedural    Semântica +       Tool retrieval   │
+│    (Write — system       Episódica         (Select)         │
+│     prompt / DoR)        (Select — RAG)                     │
+└─────────────────────────────────────────────────────────────┘
+          ▲                     ▲                  ▲
+          │                     │                  │
+    System prompt          RAG híbrido         API schemas
+    + runbook              (retrieval)         + few-shot
+```
+
+RAG resolve o problema de **Select** para conhecimento semântico e episódico. Mas um sistema completo também precisa de **Write** (para persistir estado entre passos), **Compress** (para não afogar o modelo em contexto) e **Isolate** (para separar contextos de agentes diferentes).
+
+O guia até aqui cobriu RAG em profundidade. O frame de context engineering posiciona onde RAG vive no sistema maior.
+
+---
+
+## 20. Caso de Uso — Validação de Cards Jira (Core Banking)
+
+Esta seção aplica os conceitos do guia — RAG, context engineering e os 4 movimentos — a um problema concreto de produção: validar automaticamente se uma issue de bug em um sistema core banking tem qualidade suficiente para avançar no fluxo de desenvolvimento.
+
+### O Problema
+
+Issues de bug em sistemas de core banking frequentemente chegam ao time técnico sem informação suficiente para reprodução ou análise:
+
+- Descrição vaga do comportamento esperado vs. observado
+- Evidências como screenshots e logs ausentes, ilegíveis ou sem contexto
+- Campos obrigatórios do Definition of Ready (DoR) não preenchidos
+- Simulações de teste inconsistentes com o erro descrito
+
+O time perde tempo pedindo informações complementares ou descartando issues mal-formadas manualmente. Com volume alto de issues, esse custo escala linearmente e se torna um gargalo real.
+
+### A Solução — Validação com Context Engineering
+
+```
+Jira API (issue criada)
+        │
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   PIPELINE DE VALIDAÇÃO                      │
+│                                                              │
+│  [Compress — Ingestão de Contexto]                           │
+│   Issue fields (texto)      → chunking direto                │
+│   Anexos PDF                → parser + chunks                │
+│   Imagens / screenshots     → OCR (Chandra2/GLM/RapidOCR)   │
+│   CSV / logs de execução    → extrator de campos-chave       │
+│                                                              │
+│  [Select — Memória Procedural]                               │
+│   DoR checklist             → recuperado via RAG             │
+│   Regras de validação       → recuperado via RAG             │
+│                                                              │
+│  [Select — Memória Episódica]                                │
+│   Issues similares resolvidas → busca vetorial (top-3)       │
+│                                                              │
+│  ┌──────────────────────────────────────────────────┐        │
+│  │            AGENTE 1 — Checklist DoR             │        │
+│  │  Recebe: campos da issue + DoR                  │        │
+│  │  Tarefa: verificar campos obrigatórios          │        │
+│  │  Saída: scratchpad {gaps: [...]}  [Write]       │        │
+│  └──────────────────────────────────────────────────┘        │
+│                          │                                   │
+│                   [Isolate — contexto independente]          │
+│                          ▼                                   │
+│  ┌──────────────────────────────────────────────────┐        │
+│  │         AGENTE 2 — Coerência Semântica          │        │
+│  │  Recebe: scratchpad do Ag.1 + anexos OCR        │        │
+│  │  Tarefa: os anexos confirmam o problema?        │        │
+│  │  Saída: {coerencia: score, evidencias: [...]}   │        │
+│  └──────────────────────────────────────────────────┘        │
+│                          │                                   │
+│                          ▼                                   │
+│        Decisão binária: REFINAMENTO / DESCARTAR              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Mapeamento com os 4 Movimentos
+
+| Movimento | O que acontece neste caso de uso |
+|---|---|
+| **Write** | Agente 1 escreve scratchpad com gaps identificados. Agente 2 lê esse scratchpad em vez de reprocessar a issue inteira. |
+| **Select** | RAG recupera o DoR (memória procedural) + issues similares resolvidas (memória episódica) + chunks dos anexos da issue atual (memória semântica). |
+| **Compress** | OCR extrai texto de screenshots. CSV parser extrai campos-chave. PDF de 60 páginas vira resumo de 3 parágrafos na ingestão, com full chunks disponíveis se necessário. |
+| **Isolate** | Agente 1 (checklist) e Agente 2 (coerência) têm contextos independentes. Um não vê o raciocínio interno do outro — apenas o resultado estruturado via scratchpad. |
+
+### Modos de Falha e Como Evitar
+
+| Modo | Exemplo concreto | Contra-medida |
+|---|---|---|
+| **Context Poisoning** | Log de exceção de 2022 recuperado junto com issue de 2026 por similaridade de texto | Filtro por metadados: `issue_id` + `data_criacao >= cutoff` |
+| **Context Distraction** | Screenshot de tela de login incluída quando o bug é no módulo de pagamentos | Compress: OCR com relevance score antes de incluir; filtrar por `issue_id` na ingestão |
+| **Context Confusion** | Descrição do campo "Passos para reprodução" contradiz o log de stack trace | Agente 2 detecta como `coerencia: baixa` — sinalizar, não resolver |
+| **Context Clash** | DoR v1 (desatualizado) e DoR v2 (atual) ambos recuperados pelo RAG | Metadado de versão + filtro: sempre usar DoR com `versao = current` |
+
+### O Prompt de Validação (Agente 1 — Checklist)
+
+```
+Sistema: Você é um analista de qualidade de issues de core banking.
+         Valide se a issue abaixo atende ao Definition of Ready (DoR).
+         Responda APENAS com base nos documentos fornecidos.
+         Se um campo obrigatório estiver ausente ou incompleto, liste-o em 'gaps'.
+         Responda em JSON.
+
+---DoR (versão atual) [recuperado via RAG]---
+{conteúdo do DoR indexado}
+
+---Issue PROJ-4521---
+Título: Erro no processamento de TEDs acima de R$ 50.000
+Descrição: [texto da issue]
+Passos para reprodução: [...]
+Ambiente: [...]
+Anexos: screenshot-erro.png, application.log
+
+Saída esperada:
+{ "status": "...", "gaps": [{"campo": "...", "motivo": "..."}], "resumo": "..." }
+```
+
+### O Output Final
+
+```json
+{
+  "issue": "PROJ-4521",
+  "decisao": "REFINAMENTO",
+  "confianca": 0.87,
+  "checklist": {
+    "status": "incompleto",
+    "gaps": [
+      {"campo": "criterios_aceite", "motivo": "ausente"},
+      {"campo": "ambiente_simulacao", "motivo": "versão não especificada"}
+    ]
+  },
+  "coerencia_semantica": {
+    "score": 0.72,
+    "observacao": "Screenshot confirma erro 500, mas log anexo é de outro módulo (AuthService vs. TED processor)"
+  },
+  "fontes_usadas": ["dor_v2.pdf", "PROJ-4521-screenshot.png", "PROJ-4521-log.txt"]
+}
+```
+
+A resposta é estruturada, rastreável e auditável — cada decisão tem uma fonte mapeada. O time técnico recebe não só a decisão, mas a justificativa para comunicar de volta ao solicitante com precisão.
+
+### Por que RAG + Context Engineering resolve este problema
+
+- **RAG** permite recuperar o DoR atualizado sem embutir as regras no prompt — quando o DoR mudar, você atualiza o documento indexado, não o código.
+- **Write** permite que os dois agentes colaborem sem re-processar a issue inteira — o scratchpad funciona como memória de trabalho compartilhada entre as etapas.
+- **Compress** torna os anexos processáveis — sem OCR e extração de campos, imagens e logs são contexto opaco e inutilizável.
+- **Isolate** permite escalar — Agente 1 pode ser otimizado independentemente de Agente 2; se o checklist melhorar, a lógica de coerência não precisa mudar.
+
+---
+
 ## Referência Rápida
 
 | Componente | O que faz | Tecnologias |
@@ -1455,4 +1710,4 @@ O cenário escolhido neste projeto foi **Advanced RAG híbrido, hierárquico e c
 
 ---
 
-*Documento baseado em 42 artigos científicos publicados entre 2020 e 2026, incluindo pesquisas de Meta AI, Google, Microsoft, IBM, Amazon, KAIST, Renmin University, Stanford, MIT e outros.*
+*Documento baseado em 42 artigos científicos publicados entre 2020 e 2026, incluindo pesquisas de Meta AI, Google, Microsoft, IBM, Amazon, KAIST, Renmin University, Stanford, MIT e outros. As seções 19 e 20 incorporam o framework de Context Engineering de Lance Martin (LangChain, 2025) e o modelo de modos de falha de contexto de Drew Breunig (2025).*

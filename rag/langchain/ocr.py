@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import io
@@ -119,33 +120,28 @@ class OCRAsset:
 
 
 class ChandraOCRBackend:
+    """Backend Chandra2 — usa RapidOCR + ONNX Runtime internamente."""
+
     name = "chandra2"
-    _client: Any = None
+    _engine: Any = None
 
     def enabled(self) -> bool:
         return _env_bool("RAG_OCR_CHANDRA_ENABLED", True)
 
-    def _client_instance(self) -> Any:
-        if self._client is not None:
-            return self._client
-
-        module = importlib.import_module("chandra_ocr")
-        client_cls = getattr(module, "ChandraOCR")
-        model_name = os.environ.get("RAG_OCR_CHANDRA_MODEL", "").strip()
-        if model_name:
-            try:
-                self._client = client_cls(model_name=model_name)
-                return self._client
-            except TypeError:
-                LOGGER.debug("ChandraOCR nao aceita model_name no construtor; usando default.")
-        self._client = client_cls()
-        return self._client
+    def _engine_instance(self) -> Any:
+        if self._engine is not None:
+            return self._engine
+        from rapidocr_onnxruntime import RapidOCR
+        self._engine = RapidOCR()
+        return self._engine
 
     def parse(self, asset: VisualAsset) -> OCRAsset | None:
-        client = self._client_instance()
-        output_format = os.environ.get("RAG_OCR_CHANDRA_OUTPUT", "json")
-        payload = client.parse(asset.image_bytes, output_format=output_format)
-        text = _extract_text_payload(payload)
+        engine = self._engine_instance()
+        result, _ = engine(asset.image_bytes)
+        if not result:
+            return None
+        lines = [item[1] for item in result if item and len(item) > 1 and item[1]]
+        text = "\n".join(lines).strip()
         if not text:
             return None
         return OCRAsset(
@@ -158,53 +154,47 @@ class ChandraOCRBackend:
             content_hash=asset.content_hash,
             ocr_engine=self.name,
             text=text,
-            metadata={**asset.metadata, "backend": self.name, "output_format": output_format},
+            metadata={**asset.metadata, "backend": self.name},
         )
 
 
 class HuggingFaceGLMOCRBackend:
+    """Backend TrOCR/VisionEncoderDecoder via HuggingFace Transformers.
+
+    Usa AutoProcessor + VisionEncoderDecoderModel diretamente (compatível com
+    transformers >=5.x onde o pipeline 'image-to-text' foi removido).
+    Modelo padrão: microsoft/trocr-base-printed
+    """
+
     name = "glm"
-    _pipeline: Any = None
+    _processor: Any = None
+    _model: Any = None
 
     def enabled(self) -> bool:
         return _env_bool("RAG_OCR_GLM_ENABLED", True) and bool(os.environ.get("RAG_OCR_GLM_MODEL_ID", "").strip())
 
-    def _pipeline_instance(self) -> Any:
-        if self._pipeline is not None:
-            return self._pipeline
+    def _load(self) -> tuple[Any, Any]:
+        if self._model is not None:
+            return self._processor, self._model
 
-        from transformers import pipeline
+        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-        kwargs: dict[str, Any] = {
-            "task": os.environ.get("RAG_OCR_GLM_TASK", "image-text-to-text"),
-            "model": os.environ["RAG_OCR_GLM_MODEL_ID"],
-            "trust_remote_code": True,
-            "local_files_only": _env_bool("RAG_OCR_LOCAL_FILES_ONLY", True),
-        }
-        device_map = os.environ.get("RAG_OCR_GLM_DEVICE_MAP", "auto").strip()
-        if device_map:
-            kwargs["device_map"] = device_map
+        model_id = os.environ["RAG_OCR_GLM_MODEL_ID"]
+        local_files_only = _env_bool("RAG_OCR_LOCAL_FILES_ONLY", False)
 
-        self._pipeline = pipeline(**kwargs)
-        return self._pipeline
+        self._processor = TrOCRProcessor.from_pretrained(model_id, local_files_only=local_files_only)
+        self._model = VisionEncoderDecoderModel.from_pretrained(model_id, local_files_only=local_files_only)
+        return self._processor, self._model
 
     def parse(self, asset: VisualAsset) -> OCRAsset | None:
         from PIL import Image
 
-        generator = self._pipeline_instance()
-        prompt = os.environ.get(
-            "RAG_OCR_GLM_PROMPT",
-            "Extract all visible text from this image. Return only grounded text and layout cues.",
-        )
-        max_new_tokens = int(os.environ.get("RAG_OCR_GLM_MAX_NEW_TOKENS", "1024"))
+        processor, model = self._load()
         image = Image.open(io.BytesIO(asset.image_bytes)).convert("RGB")
+        pixel_values = processor(images=image, return_tensors="pt").pixel_values
+        generated_ids = model.generate(pixel_values)
+        text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
-        try:
-            payload = generator(image, prompt=prompt, max_new_tokens=max_new_tokens)
-        except TypeError:
-            payload = generator(image, max_new_tokens=max_new_tokens)
-
-        text = _extract_pipeline_text(payload)
         if not text:
             return None
         return OCRAsset(
@@ -217,15 +207,108 @@ class HuggingFaceGLMOCRBackend:
             content_hash=asset.content_hash,
             ocr_engine=self.name,
             text=text,
-            metadata={**asset.metadata, "backend": self.name, "max_new_tokens": max_new_tokens},
+            metadata={**asset.metadata, "backend": self.name},
+        )
+
+
+class RapidOCRBackend:
+    """OCR puro Python usando RapidOCR + ONNX Runtime. Sem dependências de sistema."""
+
+    name = "rapid"
+    _engine: Any = None
+
+    def enabled(self) -> bool:
+        return _env_bool("RAG_OCR_RAPID_ENABLED", True)
+
+    def _engine_instance(self) -> Any:
+        if self._engine is not None:
+            return self._engine
+        from rapidocr_onnxruntime import RapidOCR
+        self._engine = RapidOCR()
+        return self._engine
+
+    def parse(self, asset: VisualAsset) -> OCRAsset | None:
+        engine = self._engine_instance()
+        result, _ = engine(asset.image_bytes)
+        if not result:
+            return None
+
+        lines = [item[1] for item in result if item and len(item) > 1 and item[1]]
+        text = "\n".join(lines).strip()
+        if not text:
+            return None
+
+        return OCRAsset(
+            source_key=asset.source_key,
+            asset_name=asset.asset_name,
+            asset_kind=asset.asset_kind,
+            page_number=asset.page_number,
+            mime_type=asset.mime_type,
+            image_bytes=asset.image_bytes,
+            content_hash=asset.content_hash,
+            ocr_engine=self.name,
+            text=text,
+            metadata={**asset.metadata, "backend": self.name},
+        )
+
+
+class OllamaVisionOCRBackend:
+    """Uses an Ollama vision model (e.g. moondream) for image OCR."""
+
+    name = "ollama_vision"
+
+    def enabled(self) -> bool:
+        return _env_bool("RAG_OCR_OLLAMA_ENABLED", True) and bool(
+            os.environ.get("RAG_OCR_OLLAMA_MODEL", "").strip()
+        )
+
+    def parse(self, asset: VisualAsset) -> OCRAsset | None:
+        import ollama as _ollama
+
+        model = os.environ["RAG_OCR_OLLAMA_MODEL"].strip()
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        prompt = os.environ.get(
+            "RAG_OCR_OLLAMA_PROMPT",
+            "Extract every piece of text visible in this image. "
+            "Return only the extracted text, preserving line breaks. "
+            "If there is no text, respond with an empty string.",
+        )
+
+        b64 = base64.b64encode(asset.image_bytes).decode()
+        client = _ollama.Client(host=base_url)
+        response = client.chat(
+            model=model,
+            messages=[{"role": "user", "content": prompt, "images": [b64]}],
+        )
+        text = (response.message.content or "").strip()
+        if not text:
+            return None
+
+        return OCRAsset(
+            source_key=asset.source_key,
+            asset_name=asset.asset_name,
+            asset_kind=asset.asset_kind,
+            page_number=asset.page_number,
+            mime_type=asset.mime_type,
+            image_bytes=asset.image_bytes,
+            content_hash=asset.content_hash,
+            ocr_engine=self.name,
+            text=text,
+            metadata={**asset.metadata, "backend": self.name, "model": model},
         )
 
 
 def _build_backends() -> list[Any]:
-    names = [name.strip().lower() for name in os.environ.get("RAG_OCR_BACKENDS", "chandra2,glm").split(",") if name.strip()]
+    names = [
+        name.strip().lower()
+        for name in os.environ.get("RAG_OCR_BACKENDS", "rapid,ollama_vision,chandra2,glm").split(",")
+        if name.strip()
+    ]
     registry = {
         "chandra2": ChandraOCRBackend,
         "glm": HuggingFaceGLMOCRBackend,
+        "ollama_vision": OllamaVisionOCRBackend,
+        "rapid": RapidOCRBackend,
     }
     backends: list[Any] = []
     for name in names:
@@ -233,6 +316,16 @@ def _build_backends() -> list[Any]:
         if backend_cls is not None:
             backends.append(backend_cls())
     return backends
+
+
+_BACKENDS_CACHE: list[Any] | None = None
+
+
+def _get_backends() -> list[Any]:
+    global _BACKENDS_CACHE
+    if _BACKENDS_CACHE is None:
+        _BACKENDS_CACHE = _build_backends()
+    return _BACKENDS_CACHE
 
 
 def extract_visual_assets(file_path: str, source_key: str) -> list[VisualAsset]:
@@ -302,7 +395,7 @@ def extract_ocr_assets(file_path: str, source_key: str) -> list[OCRAsset]:
 
     backends = [
         backend
-        for backend in _build_backends()
+        for backend in _get_backends()
         if backend.enabled() and getattr(backend, "name", "unknown") not in PROCESS_DISABLED_BACKENDS
     ]
     if not backends:

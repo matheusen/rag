@@ -30,7 +30,7 @@ opentelemetry-instrumentation-sqlalchemy
 prometheus-fastapi-instrumentator  # expõe /metrics para o Prometheus scrape
 python-json-logger                 # formata logs Python como JSON → Promtail → Loki
 # ── Shared ────────────────────────────────────────────────────────────────────
-psycopg[binary]==3.2.6
+psycopg[binary]>=3.2.6
 pgvector==0.3.6
 SQLAlchemy==2.0.49
 python-dotenv==1.1.0
